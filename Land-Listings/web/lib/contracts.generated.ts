@@ -4,24 +4,206 @@
 export const CHAIN_ID = 31337;
 
 export const ListingBoard = {
-  address: "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  address: "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
   abi: [
     {
       "inputs": [
         {
           "internalType": "string",
-          "name": "title",
+          "name": "reason",
           "type": "string"
+        }
+      ],
+      "name": "InvalidListing",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "id",
+          "type": "uint256"
+        }
+      ],
+      "name": "ListingNotFound",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "id",
+          "type": "uint256"
         },
         {
-          "internalType": "string",
-          "name": "location",
-          "type": "string"
+          "internalType": "address",
+          "name": "caller",
+          "type": "address"
+        }
+      ],
+      "name": "NotListingOwner",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "id",
+          "type": "uint256"
         },
         {
+          "indexed": true,
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "enum ListingBoard.Category",
+          "name": "category",
+          "type": "uint8"
+        },
+        {
+          "indexed": false,
+          "internalType": "enum ListingBoard.ListingType",
+          "name": "listingType",
+          "type": "uint8"
+        },
+        {
+          "indexed": false,
+          "internalType": "enum ListingBoard.PricePeriod",
+          "name": "pricePeriod",
+          "type": "uint8"
+        },
+        {
+          "indexed": false,
           "internalType": "uint256",
           "name": "priceWei",
           "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint32",
+          "name": "sizeSqm",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "region",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "metadataCID",
+          "type": "string"
+        }
+      ],
+      "name": "ListingCreated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "id",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "enum ListingBoard.Status",
+          "name": "status",
+          "type": "uint8"
+        }
+      ],
+      "name": "ListingStatusChanged",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "id",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "enum ListingBoard.PricePeriod",
+          "name": "pricePeriod",
+          "type": "uint8"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "priceWei",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint32",
+          "name": "sizeSqm",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "metadataCID",
+          "type": "string"
+        }
+      ],
+      "name": "ListingUpdated",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "internalType": "enum ListingBoard.ListingType",
+              "name": "listingType",
+              "type": "uint8"
+            },
+            {
+              "internalType": "enum ListingBoard.Category",
+              "name": "category",
+              "type": "uint8"
+            },
+            {
+              "internalType": "enum ListingBoard.PricePeriod",
+              "name": "pricePeriod",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint256",
+              "name": "priceWei",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint32",
+              "name": "sizeSqm",
+              "type": "uint32"
+            },
+            {
+              "internalType": "string",
+              "name": "region",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "metadataCID",
+              "type": "string"
+            }
+          ],
+          "internalType": "struct ListingBoard.NewListing",
+          "name": "input",
+          "type": "tuple"
         }
       ],
       "name": "createListing",
@@ -32,19 +214,6 @@ export const ListingBoard = {
           "type": "uint256"
         }
       ],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "id",
-          "type": "uint256"
-        }
-      ],
-      "name": "deactivateListing",
-      "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
     },
@@ -71,14 +240,29 @@ export const ListingBoard = {
               "type": "address"
             },
             {
-              "internalType": "string",
-              "name": "title",
-              "type": "string"
+              "internalType": "enum ListingBoard.ListingType",
+              "name": "listingType",
+              "type": "uint8"
             },
             {
-              "internalType": "string",
-              "name": "location",
-              "type": "string"
+              "internalType": "enum ListingBoard.Category",
+              "name": "category",
+              "type": "uint8"
+            },
+            {
+              "internalType": "enum ListingBoard.Status",
+              "name": "status",
+              "type": "uint8"
+            },
+            {
+              "internalType": "enum ListingBoard.PricePeriod",
+              "name": "pricePeriod",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint32",
+              "name": "sizeSqm",
+              "type": "uint32"
             },
             {
               "internalType": "uint256",
@@ -86,9 +270,24 @@ export const ListingBoard = {
               "type": "uint256"
             },
             {
-              "internalType": "bool",
-              "name": "active",
-              "type": "bool"
+              "internalType": "uint64",
+              "name": "createdAt",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint64",
+              "name": "updatedAt",
+              "type": "uint64"
+            },
+            {
+              "internalType": "string",
+              "name": "region",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "metadataCID",
+              "type": "string"
             }
           ],
           "internalType": "struct ListingBoard.Listing",
@@ -97,6 +296,24 @@ export const ListingBoard = {
         }
       ],
       "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "id",
+          "type": "uint256"
+        },
+        {
+          "internalType": "enum ListingBoard.Status",
+          "name": "status",
+          "type": "uint8"
+        }
+      ],
+      "name": "setStatus",
+      "outputs": [],
+      "stateMutability": "nonpayable",
       "type": "function"
     },
     {
@@ -110,6 +327,39 @@ export const ListingBoard = {
         }
       ],
       "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "id",
+          "type": "uint256"
+        },
+        {
+          "internalType": "enum ListingBoard.PricePeriod",
+          "name": "pricePeriod",
+          "type": "uint8"
+        },
+        {
+          "internalType": "uint256",
+          "name": "priceWei",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint32",
+          "name": "sizeSqm",
+          "type": "uint32"
+        },
+        {
+          "internalType": "string",
+          "name": "metadataCID",
+          "type": "string"
+        }
+      ],
+      "name": "updateListing",
+      "outputs": [],
+      "stateMutability": "nonpayable",
       "type": "function"
     }
   ],

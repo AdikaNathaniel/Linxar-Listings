@@ -1,179 +1,280 @@
 // =============================================================================
-// Tests for ListingBoard.sol
+// Tests for ListingBoard.sol (version 2)
 // =============================================================================
-// A test file deploys the contract onto a fresh, simulated blockchain that
-// Hardhat creates in memory, calls its functions, and checks that the results
-// are what we expect. Nothing here touches a real network or costs real money.
+// Each test deploys a fresh contract onto a private, in-memory blockchain,
+// calls its functions, and checks the results. Nothing here touches a real
+// network or costs real money.
 //
-// Run with:  npx hardhat test
+// Run with:  npm run test   (or: npx hardhat test)
 // =============================================================================
 
-// `describe` groups related tests together; `it` defines one single test.
-// Both come from Node.js's built-in test runner, so nothing extra to install.
 import { describe, it } from "node:test";
-
-// `assert` is how a test says "this MUST be true". If an assertion fails,
-// the test fails and Hardhat prints what was expected vs. what it got.
 import assert from "node:assert/strict";
-
-// `network` is Hardhat's entry point for creating a blockchain to test on.
 import { network } from "hardhat";
-
-// `parseEther` converts a human-friendly ETH amount ("2") into wei
-// (2000000000000000000n). `getAddress` normalises an address's
-// capital letters so two addresses can be compared reliably.
 import { parseEther, getAddress } from "viem";
 
-describe("ListingBoard", async function () {
-  // ---------------------------------------------------------------------------
-  // SETUP: create a private test blockchain
-  // ---------------------------------------------------------------------------
-  // `network.create()` starts a brand-new simulated Ethereum network that
-  // exists only while these tests run. It gives us two helpers:
-  //   - viem:           tools to deploy contracts, send transactions, read data
-  //   - networkHelpers: tools to control the test chain (snapshots, time, ...)
+// -----------------------------------------------------------------------------
+// Enum values, matching the order in the contract.
+// Solidity stores enums as small numbers: the first option is 0, the next 1…
+// Naming them here makes the tests readable: Category.Land instead of 3.
+// -----------------------------------------------------------------------------
+const ListingType = { Sale: 0, Rent: 1, Lease: 2 } as const;
+const Category = { Residential: 0, Commercial: 1, Industrial: 2, Land: 3 } as const;
+const Status = { Available: 0, UnderOffer: 1, Rented: 2, Sold: 3, Withdrawn: 4 } as const;
+const PricePeriod = { OneOff: 0, PerMonth: 1, PerYear: 2 } as const;
+
+// An example IPFS fingerprint. The contract only stores it; it doesn't check
+// that a real file exists. (On the website, real uploads produce real CIDs.)
+const SAMPLE_CID = "bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy";
+
+// The shape of the contract's NewListing struct, as viem expects it.
+// uint256 → bigint, uint8/uint32 (enums, sizeSqm) → number.
+type NewListingInput = {
+  listingType: number;
+  category: number;
+  pricePeriod: number;
+  priceWei: bigint;
+  sizeSqm: number;
+  region: string;
+  metadataCID: string;
+};
+
+// A valid example listing. Tests can change individual fields with
+// `overrides`, e.g. newListing({ priceWei: 0n }) to test a zero price.
+function newListing(overrides: Partial<NewListingInput> = {}): NewListingInput {
+  return {
+    listingType: ListingType.Sale,
+    category: Category.Land,
+    pricePeriod: PricePeriod.OneOff,
+    priceWei: parseEther("5"), // 5 ETH, in wei
+    sizeSqm: 500,
+    region: "Greater Accra",
+    metadataCID: SAMPLE_CID,
+    ...overrides,
+  };
+}
+
+describe("ListingBoard v2", async function () {
+  // A brand-new simulated blockchain, just for these tests.
   const { viem, networkHelpers } = await network.create();
 
-  // The test network comes with 20 funded accounts (wallets). We take two:
-  //   - seller: will create listings (plays the property owner / agent)
-  //   - stranger: someone else, used to check they CAN'T touch the seller's listing
-  // These are like two different people, each with their own MetaMask.
+  // Two of the 20 test accounts: think of them as two different people.
   const [seller, stranger] = await viem.getWalletClients();
 
-  // ---------------------------------------------------------------------------
-  // FIXTURE: a fresh copy of the contract for every test
-  // ---------------------------------------------------------------------------
-  // A "fixture" is a setup function. `loadFixture` runs it once, takes a 
-  // snapshot of the blockchain, and then rewinds to that snapshot before each
-  // test. Every test therefore starts with a clean, just-deployed contract and
-  // no listings, so tests can never affect each other.
-  // (It must be a named function, not an arrow function, for caching to work.)
+  // Fixture: deploys a fresh contract. `loadFixture` snapshots the chain after
+  // the first run and rewinds to it before each test, so every test starts clean.
   async function deployListingBoard() {
-    // Deploys ListingBoard.sol to the test chain. This is a real deployment
-    // transaction, sent from the first account (`seller`) by default.
-    // The returned object is "typed": it knows every function in the contract
-    // from the ABI, so typos in function names are caught before running.
     const listingBoard = await viem.deployContract("ListingBoard");
     return { listingBoard };
   }
 
-  // ---------------------------------------------------------------------------
-  // TEST 1: a brand-new contract has no listings
-  // ---------------------------------------------------------------------------
+  // A second fixture that also creates one listing (id 0) owned by `seller`.
+  // Many tests need an existing listing to work with.
+  async function deployWithOneListing() {
+    const listingBoard = await viem.deployContract("ListingBoard");
+    await listingBoard.write.createListing([newListing()], { account: seller.account });
+    return { listingBoard };
+  }
+
+  // ===========================================================================
+  // CREATING LISTINGS
+  // ===========================================================================
+
   it("starts with zero listings", async function () {
     const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
-
-    // `.read.` calls a `view` function. Reads are free: no transaction,
-    // no gas, no signature. Solidity's uint256 comes back as a JavaScript
-    // BigInt, which is why we compare to `0n` (the "n" means BigInt).
-    const total = await listingBoard.read.totalListings();
-
-    assert.equal(total, 0n);
+    assert.equal(await listingBoard.read.totalListings(), 0n);
   });
 
-  // ---------------------------------------------------------------------------
-  // TEST 2: creating a listing stores every field correctly
-  // ---------------------------------------------------------------------------
-  it("creates a listing and stores all its details", async function () {
+  it("creates a listing and stores every field", async function () {
     const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
 
-    const price = parseEther("2"); // 2 ETH, expressed in wei
-
-    // `.write.` sends a TRANSACTION, because createListing changes the
-    // blockchain's state. On a real network this is the moment MetaMask would
-    // pop up asking the user to sign and pay gas.
-    // The function's arguments go inside an array, in the same order as in
-    // Solidity: (title, location, priceWei).
-    // `account: seller.account` says WHO signs it. Inside the contract,
-    // this account becomes `msg.sender`.
+    // The struct argument is passed as a JavaScript object. viem matches the
+    // keys to the struct's field names using the ABI.
     await listingBoard.write.createListing(
-      ["3-bedroom house", "East Legon, Accra", price],
+      [newListing({ listingType: ListingType.Rent, pricePeriod: PricePeriod.PerMonth })],
       { account: seller.account },
     );
 
-    // There should now be exactly one listing.
-    assert.equal(await listingBoard.read.totalListings(), 1n);
-
-    // Read it back. The first listing has id 0, because arrays start at 0.
-    // viem returns the Solidity struct as a JavaScript object, with the same
-    // field names as the `Listing` struct.
     const listing = await listingBoard.read.getListing([0n]);
 
     assert.equal(listing.id, 0n);
-    assert.equal(listing.title, "3-bedroom house");
-    assert.equal(listing.location, "East Legon, Accra");
-    assert.equal(listing.priceWei, price);
-    assert.equal(listing.active, true); // new listings start active
+    assert.equal(getAddress(listing.owner), getAddress(seller.account.address)); // from msg.sender
+    assert.equal(listing.listingType, ListingType.Rent);
+    assert.equal(listing.category, Category.Land);
+    assert.equal(listing.status, Status.Available); // every new listing starts Available
+    assert.equal(listing.pricePeriod, PricePeriod.PerMonth);
+    assert.equal(listing.priceWei, parseEther("5"));
+    assert.equal(listing.sizeSqm, 500);
+    assert.equal(listing.region, "Greater Accra");
+    assert.equal(listing.metadataCID, SAMPLE_CID);
 
-    // The most important check: the contract recorded the SIGNER as the owner.
-    // It got this from `msg.sender`, not from anything the caller typed in,
-    // so nobody can create a listing in someone else's name.
-    assert.equal(getAddress(listing.owner), getAddress(seller.account.address));
+    // block.timestamp was recorded. On a new listing, created = updated.
+    assert.ok(listing.createdAt > 0n);
+    assert.equal(listing.updatedAt, listing.createdAt);
   });
 
-  // ---------------------------------------------------------------------------
-  // TEST 3: each new listing gets the next id
-  // ---------------------------------------------------------------------------
-  it("gives each new listing the next id", async function () {
+  it("emits ListingCreated with all the filterable fields", async function () {
     const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
 
-    await listingBoard.write.createListing(["Plot of land", "Tema", parseEther("5")]);
-    await listingBoard.write.createListing(["Office space", "Osu, Accra", parseEther("1")]);
-
-    // Two listings → ids 0 and 1, and the total is 2.
-    assert.equal(await listingBoard.read.totalListings(), 2n);
-    assert.equal((await listingBoard.read.getListing([1n])).title, "Office space");
+    // Arguments in the same order as the event declaration:
+    // (id, owner, category, listingType, pricePeriod, priceWei, sizeSqm, region, metadataCID)
+    await viem.assertions.emitWithArgs(
+      listingBoard.write.createListing([newListing()], { account: seller.account }),
+      listingBoard,
+      "ListingCreated",
+      [
+        0n,
+        getAddress(seller.account.address),
+        Category.Land,
+        ListingType.Sale,
+        PricePeriod.OneOff,
+        parseEther("5"),
+        500,
+        "Greater Accra",
+        SAMPLE_CID,
+      ],
+    );
   });
 
-  // ---------------------------------------------------------------------------
-  // TEST 4: the owner can deactivate their own listing
-  // ---------------------------------------------------------------------------
-  it("lets the owner deactivate their listing", async function () {
-    const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
+  // ===========================================================================
+  // INPUT VALIDATION: the contract rejects bad data
+  // ===========================================================================
+  // `revertWithCustomErrorWithArgs` checks that the transaction fails with a
+  // specific CUSTOM ERROR, carrying specific values.
 
-    await listingBoard.write.createListing(
-      ["Shop", "Kumasi", parseEther("3")],
-      { account: seller.account },
+  it("rejects a listing with a zero price", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.createListing([newListing({ priceWei: 0n })]),
+      listingBoard,
+      "InvalidListing",
+      ["Price must be more than zero"],
+    );
+  });
+
+  it("rejects a listing without a metadata CID", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.createListing([newListing({ metadataCID: "" })]),
+      listingBoard,
+      "InvalidListing",
+      ["Metadata CID is required"],
+    );
+  });
+
+  it("rejects a listing without a region", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.createListing([newListing({ region: "" })]),
+      listingBoard,
+      "InvalidListing",
+      ["Region is required"],
+    );
+  });
+
+  // ===========================================================================
+  // UPDATING LISTINGS
+  // ===========================================================================
+
+  it("lets the owner update price, period, size and details", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployWithOneListing);
+    const before = await listingBoard.read.getListing([0n]);
+
+    // Move the chain's clock forward 1 hour, so we can see updatedAt change.
+    await networkHelpers.time.increase(3600);
+
+    const NEW_CID = "bafkreiexamplenewdetailsversion2";
+    await viem.assertions.emitWithArgs(
+      listingBoard.write.updateListing([0n, PricePeriod.PerYear, parseEther("4"), 450, NEW_CID], {
+        account: seller.account,
+      }),
+      listingBoard,
+      "ListingUpdated",
+      [0n, PricePeriod.PerYear, parseEther("4"), 450, NEW_CID],
     );
 
-    // Same account that created it, so the `require` check in the contract
-    // (owner == msg.sender) passes.
-    await listingBoard.write.deactivateListing([0n], { account: seller.account });
+    const after = await listingBoard.read.getListing([0n]);
+    assert.equal(after.pricePeriod, PricePeriod.PerYear);
+    assert.equal(after.priceWei, parseEther("4"));
+    assert.equal(after.sizeSqm, 450);
+    assert.equal(after.metadataCID, NEW_CID);
+    assert.ok(after.updatedAt > before.updatedAt); // timestamp moved forward
+    assert.equal(after.createdAt, before.createdAt); // creation time never changes
+  });
 
-    // The listing still exists (blockchain history isn't deleted),
-    // but it's now marked inactive.
+  // SECURITY: contracts are public, so anyone can call updateListing.
+  // Only the `onlyListingOwner` modifier stops strangers editing your listing.
+  it("does not let a stranger update someone else's listing", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployWithOneListing);
+
+    // The error carries WHICH listing and WHO tried: (id, caller)
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.updateListing([0n, PricePeriod.OneOff, 1n, 1, "hacked"], {
+        account: stranger.account,
+      }),
+      listingBoard,
+      "NotListingOwner",
+      [0n, getAddress(stranger.account.address)],
+    );
+
+    // The transaction reverted, so nothing changed.
     const listing = await listingBoard.read.getListing([0n]);
-    assert.equal(listing.active, false);
+    assert.equal(listing.metadataCID, SAMPLE_CID);
   });
 
-  // ---------------------------------------------------------------------------
-  // TEST 5 (SECURITY): a stranger CANNOT deactivate someone else's listing
-  // ---------------------------------------------------------------------------
-  // This is the most important test in the file. Contracts are public: anyone
-  // in the world can call any function. The only thing stopping a stranger
-  // from removing your listing is the `require` line in the contract.
-  // This test proves that line works.
-  it("does not let a stranger deactivate someone else's listing", async function () {
-    const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
+  it("still validates the price when updating", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployWithOneListing);
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.updateListing([0n, PricePeriod.OneOff, 0n, 500, SAMPLE_CID], {
+        account: seller.account,
+      }),
+      listingBoard,
+      "InvalidListing",
+      ["Price must be more than zero"],
+    );
+  });
 
-    await listingBoard.write.createListing(
-      ["Warehouse", "Takoradi", parseEther("4")],
-      { account: seller.account },
+  // ===========================================================================
+  // STATUS
+  // ===========================================================================
+
+  it("lets the owner change the status", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployWithOneListing);
+
+    await viem.assertions.emitWithArgs(
+      listingBoard.write.setStatus([0n, Status.Rented], { account: seller.account }),
+      listingBoard,
+      "ListingStatusChanged",
+      [0n, Status.Rented],
     );
 
-    // The stranger tries to deactivate the seller's listing.
-    // `revertWith` expects the transaction to FAIL ("revert") with exactly
-    // the message written in the contract's require: "Not your listing".
-    // Note: no `await` before listingBoard.write here. We hand the pending
-    // transaction to revertWith, and it waits for it and checks the failure.
-    await viem.assertions.revertWith(
-      listingBoard.write.deactivateListing([0n], { account: stranger.account }),
-      "Not your listing",
+    assert.equal((await listingBoard.read.getListing([0n])).status, Status.Rented);
+  });
+
+  // SECURITY: a stranger must not be able to mark your property as Sold
+  // or Withdrawn.
+  it("does not let a stranger change someone else's status", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployWithOneListing);
+
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.setStatus([0n, Status.Withdrawn], { account: stranger.account }),
+      listingBoard,
+      "NotListingOwner",
+      [0n, getAddress(stranger.account.address)],
     );
 
-    // And because the transaction reverted, NOTHING changed:
-    // the listing is still active.
-    const listing = await listingBoard.read.getListing([0n]);
-    assert.equal(listing.active, true);
+    assert.equal((await listingBoard.read.getListing([0n])).status, Status.Available);
+  });
+
+  it("reports ListingNotFound for an id that doesn't exist", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployWithOneListing);
+
+    // Only listing 0 exists, so listing 7 doesn't.
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.setStatus([7n, Status.Sold], { account: seller.account }),
+      listingBoard,
+      "ListingNotFound",
+      [7n],
+    );
   });
 });

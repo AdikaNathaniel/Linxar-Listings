@@ -3,7 +3,7 @@
 // directly to the blockchain. There is no backend server in between.
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
   createPublicClient,
   createWalletClient,
@@ -20,7 +20,9 @@ import {
 // `hardhat` describes your local chain: chain ID 31337, RPC http://127.0.0.1:8545
 import { hardhat } from "viem/chains";
 import { LISTING_BOARD_ADDRESS, listingBoardAbi } from "../lib/listingBoard";
+import { CATEGORIES, LISTING_TYPES, REGIONS, STATUSES, Status } from "../lib/listingOptions";
 import { ListingCard, ListingCardSkeleton, shortAddress, type Listing } from "../components/ListingCard";
+import { CreateListingForm, type ListingFormValues } from "../components/CreateListingForm";
 import {
   AlertIcon,
   CheckIcon,
@@ -28,7 +30,6 @@ import {
   HouseIcon,
   InfoIcon,
   LogoMark,
-  SearchIcon,
   Spinner,
   WalletIcon,
 } from "../components/icons";
@@ -52,8 +53,8 @@ declare global {
 const publicClient = createPublicClient({ chain: hardhat, transport: http() });
 
 // Turns any error into a short, readable message for the user.
-// viem's errors have a `shortMessage`, e.g. "User rejected the request."
-// or the contract's revert reason, e.g. "Not your listing".
+// viem's errors have a `shortMessage`, e.g. "User rejected the request.",
+// or name the contract's custom error, e.g. NotListingOwner.
 function errorMessage(err: unknown): string {
   if (err instanceof BaseError) return err.shortMessage;
   if (err instanceof Error) return err.message;
@@ -103,10 +104,29 @@ async function fetchListings(): Promise<Listing[]> {
   return items.reverse(); // newest first
 }
 
-// A message shown at the top of the page (transaction progress, errors…)
-type Status = { kind: "info" | "pending" | "success" | "error"; text: string; hash?: Hash };
+// -----------------------------------------------------------------------------
+// OFF-CHAIN: upload photos + details to IPFS, get back ONE fingerprint (CID)
+// -----------------------------------------------------------------------------
+// This goes to our own /api/upload route (app/api/upload/route.ts), which
+// holds the secret Pinata key and does the actual upload.
+async function uploadToIpfs(values: ListingFormValues): Promise<string> {
+  const body = new FormData();
+  body.append("title", values.title);
+  body.append("description", values.description);
+  body.append("address", values.address);
+  values.amenities.forEach((amenity) => body.append("amenities", amenity));
+  values.photos.forEach((photo) => body.append("photos", photo));
 
-type Filter = "all" | "active" | "mine";
+  const res = await fetch("/api/upload", { method: "POST", body });
+  const json = (await res.json()) as { metadataCID?: string; error?: string };
+  if (!res.ok || !json.metadataCID) throw new Error(json.error ?? "Upload to IPFS failed");
+  return json.metadataCID;
+}
+
+// A message shown at the top of the page (transaction progress, errors…)
+type Notice = { kind: "info" | "pending" | "success" | "error"; text: string; hash?: Hash };
+
+type Filter = "all" | "available" | "mine";
 
 export default function Home() {
   // ---------------------------------------------------------------------------
@@ -117,13 +137,13 @@ export default function Home() {
   const [chainId, setChainId] = useState<number | null>(null);   // network MetaMask is on
   const [listings, setListings] = useState<Listing[]>([]);       // read from the chain
   const [loading, setLoading] = useState(true);
-  const [title, setTitle] = useState("");                        // form fields
-  const [location, setLocation] = useState("");
-  const [price, setPrice] = useState("");
-  const [status, setStatus] = useState<Status | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);                       // true while a tx is in progress
+  // Filters: all of these are ON-CHAIN fields, which is why we can filter on them
   const [filter, setFilter] = useState<Filter>("all");
-  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<number | "">("");
+  const [categoryFilter, setCategoryFilter] = useState<number | "">("");
+  const [regionFilter, setRegionFilter] = useState("");
 
   const wrongNetwork = account !== null && chainId !== null && chainId !== hardhat.id;
 
@@ -143,7 +163,7 @@ export default function Home() {
     fetchListings()
       .then(setListings)
       .catch((err) =>
-        setStatus({
+        setNotice({
           kind: "error",
           text:
             err instanceof ContractNotDeployedError
@@ -152,6 +172,30 @@ export default function Home() {
         }),
       )
       .finally(() => setLoading(false));
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // LIVE FEED: listen for the contract's EVENTS
+  // ---------------------------------------------------------------------------
+  // Whenever ANYONE creates, updates or changes the status of a listing, the
+  // contract emits ListingCreated, ListingUpdated or ListingStatusChanged.
+  // `watchContractEvent` asks the node for new event logs from this contract
+  // every second, and when some arrive we re-read the listings. So every open
+  // browser window updates by itself, with no refresh, even for listings
+  // posted by other people.
+  useEffect(() => {
+    const unwatch = publicClient.watchContractEvent({
+      address: LISTING_BOARD_ADDRESS,
+      abi: listingBoardAbi, // the ABI tells viem how to decode the event data
+      pollingInterval: 1_000, // check for new events every 1,000 ms
+      onLogs: (logs) => {
+        // Each log is one event. viem decodes it using the ABI, e.g.
+        // { eventName: "ListingCreated", args: { id: 3n, owner: "0x…", ... } }
+        console.log("New contract events:", logs.map((log) => log.eventName));
+        fetchListings().then(setListings).catch(() => {});
+      },
+    });
+    return unwatch; // stop listening when the page closes
   }, []);
 
   // Follow what happens inside MetaMask.
@@ -192,7 +236,7 @@ export default function Home() {
   // ---------------------------------------------------------------------------
   async function connectWallet() {
     if (!window.ethereum) {
-      setStatus({ kind: "error", text: "MetaMask isn't installed. Get it from https://metamask.io" });
+      setNotice({ kind: "error", text: "MetaMask isn't installed. Get it from https://metamask.io" });
       return;
     }
     try {
@@ -202,9 +246,9 @@ export default function Home() {
       const [address] = await window.ethereum.request({ method: "eth_requestAccounts" });
       setAccount(address);
       await switchToLocalChain();
-      setStatus(null);
+      setNotice(null);
     } catch (err) {
-      setStatus({ kind: "error", text: errorMessage(err) });
+      setNotice({ kind: "error", text: errorMessage(err) });
     }
   }
 
@@ -236,87 +280,105 @@ export default function Home() {
   }
 
   // ---------------------------------------------------------------------------
-  // WRITE: create a listing. This is a real transaction.
+  // CREATE A LISTING: first IPFS (off-chain), then one transaction (on-chain)
   // ---------------------------------------------------------------------------
-  async function handleCreate(event: FormEvent) {
-    event.preventDefault(); // stop the browser reloading the page on submit
+  async function handleCreate(values: ListingFormValues): Promise<boolean> {
     try {
       setBusy(true);
-      setStatus({ kind: "pending", text: "Confirm the transaction in MetaMask…" });
 
-      // 1. SEND: viem encodes the call using the ABI and hands it to MetaMask.
+      // 1. OFF-CHAIN: photos + details → IPFS. We get back one CID, a short
+      //    fingerprint of the whole bundle (~59 characters instead of megabytes).
+      setNotice({ kind: "pending", text: `Uploading ${values.photos.length} photo(s) and details to IPFS…` });
+      const metadataCID = await uploadToIpfs(values);
+
+      // 2. SEND: viem encodes the call using the ABI and hands it to MetaMask.
       //    MetaMask shows the popup with the GAS FEE. When the user confirms,
       //    MetaMask signs it with the private key and broadcasts it.
       //    We get back the transaction HASH: its unique ID / receipt number.
+      setNotice({ kind: "pending", text: "Uploaded to IPFS ✔ Now confirm the transaction in MetaMask…" });
       const hash = await getWalletClient().writeContract({
         address: LISTING_BOARD_ADDRESS,
         abi: listingBoardAbi,
         functionName: "createListing",
-        // parseEther("2") → 2000000000000000000n (wei), just like in the tests
-        args: [title, location, parseEther(price)],
+        // The contract takes ONE struct (NewListing). viem builds it from this
+        // object, matching keys to the struct's field names via the ABI.
+        args: [
+          {
+            listingType: values.listingType,
+            category: values.category,
+            pricePeriod: values.pricePeriod,
+            priceWei: parseEther(values.price), // "2.5" ETH → 2500000000000000000n wei
+            sizeSqm: Math.round(Number(values.sizeSqm || 0)),
+            region: values.region,
+            metadataCID, // the IPFS fingerprint goes on-chain
+          },
+        ],
       });
 
-      // 2. WAIT: the transaction is "pending" until a block includes it.
+      // 3. WAIT: the transaction is "pending" until a block includes it.
       //    On your local node that's almost instant; on Sepolia ~12 seconds.
-      setStatus({ kind: "pending", text: "Transaction sent. Waiting for it to be mined…", hash });
+      setNotice({ kind: "pending", text: "Transaction sent. Waiting for it to be mined…", hash });
       await publicClient.waitForTransactionReceipt({ hash });
 
-      // 3. DONE: the listing is now permanently stored on the blockchain.
-      setStatus({ kind: "success", text: "Listing created and stored on the blockchain.", hash });
-      setTitle("");
-      setLocation("");
-      setPrice("");
+      // 4. DONE: the listing is now permanently on the blockchain, pointing to
+      //    its photos and details on IPFS.
+      setNotice({ kind: "success", text: "Listing created: photos on IPFS, record on the blockchain.", hash });
       await Promise.all([loadListings(), account && refreshBalance(account)]);
+      return true;
     } catch (err) {
-      // e.g. the user clicked "Reject" in MetaMask
-      setStatus({ kind: "error", text: errorMessage(err) });
+      // e.g. the upload failed, or the user clicked "Reject" in MetaMask
+      setNotice({ kind: "error", text: errorMessage(err) });
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
   // ---------------------------------------------------------------------------
-  // WRITE: deactivate a listing (only works if you're its owner)
+  // CHANGE STATUS: Available / Under offer / Rented / Sold / Withdrawn
   // ---------------------------------------------------------------------------
-  async function handleDeactivate(id: bigint) {
+  // Only the owner can do this. The contract's `onlyListingOwner` modifier
+  // would reject anyone else with the NotListingOwner error.
+  async function handleSetStatus(id: bigint, status: number) {
     try {
       setBusy(true);
-      setStatus({ kind: "pending", text: "Confirm in MetaMask…" });
+      setNotice({ kind: "pending", text: `Confirm in MetaMask: mark listing #${id} as "${STATUSES[status]}"…` });
       const hash = await getWalletClient().writeContract({
         address: LISTING_BOARD_ADDRESS,
         abi: listingBoardAbi,
-        functionName: "deactivateListing",
-        args: [id],
+        functionName: "setStatus",
+        args: [id, status], // enums are sent as their number, e.g. Sold = 3
       });
-      setStatus({ kind: "pending", text: "Transaction sent. Waiting for it to be mined…", hash });
+      setNotice({ kind: "pending", text: "Transaction sent. Waiting for it to be mined…", hash });
       await publicClient.waitForTransactionReceipt({ hash });
-      setStatus({ kind: "success", text: `Listing #${id} deactivated.`, hash });
+      setNotice({ kind: "success", text: `Listing #${id} is now "${STATUSES[status]}".`, hash });
       await Promise.all([loadListings(), account && refreshBalance(account)]);
     } catch (err) {
-      // If the contract's `require` fails, the reason shows here:
-      // "Not your listing"
-      setStatus({ kind: "error", text: errorMessage(err) });
+      setNotice({ kind: "error", text: errorMessage(err) });
     } finally {
       setBusy(false);
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Filtering and search happen in the browser, on data already read.
+  // Filtering happens in the browser, on the on-chain fields already read.
+  // (Milestone 9 moves this to The Graph, which reads the same fields from events.)
   // ---------------------------------------------------------------------------
   const isMine = (listing: Listing) =>
     account !== null && listing.owner.toLowerCase() === account.toLowerCase();
 
-  const q = query.trim().toLowerCase();
   const visible = listings.filter((listing) => {
-    if (filter === "active" && !listing.active) return false;
+    if (filter === "available" && listing.status !== Status.Available) return false;
     if (filter === "mine" && !isMine(listing)) return false;
-    if (!q) return true;
-    return listing.title.toLowerCase().includes(q) || listing.location.toLowerCase().includes(q);
+    if (typeFilter !== "" && listing.listingType !== typeFilter) return false;
+    if (categoryFilter !== "" && listing.category !== categoryFilter) return false;
+    if (regionFilter && listing.region !== regionFilter) return false;
+    return true;
   });
 
-  const activeCount = listings.filter((l) => l.active).length;
+  const availableCount = listings.filter((l) => l.status === Status.Available).length;
   const mineCount = listings.filter(isMine).length;
+  const filtersActive = typeFilter !== "" || categoryFilter !== "" || regionFilter !== "";
 
   // ---------------------------------------------------------------------------
   // What the user sees
@@ -366,24 +428,24 @@ export default function Home() {
             Property listings you can verify, not just trust.
           </h1>
           <p className="mt-3 max-w-xl opacity-85">
-            Every listing lives on the blockchain. Nobody can secretly edit it or fake who posted it,
-            including us.
+            Every listing lives on the blockchain, with its photos on IPFS. Nobody can secretly edit it or fake who
+            posted it, including us.
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Stat label="Listings" value={listings.length} />
-            <Stat label="Available" value={activeCount} />
+            <Stat label="Available" value={availableCount} />
             {account && <Stat label="Yours" value={mineCount} />}
           </div>
         </section>
 
-        {status && <StatusBanner status={status} onClose={() => setStatus(null)} />}
+        {notice && <NoticeBanner notice={notice} onClose={() => setNotice(null)} />}
 
-        <div className="grid gap-8 lg:grid-cols-[1fr_340px]">
+        <div className="grid gap-8 lg:grid-cols-[1fr_380px]">
           {/* ── Listings ────────────────────────────────────────────────── */}
           <section className="space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="flex gap-1 rounded-xl border border-line bg-surface p-1 text-sm">
-                {(["all", "active", "mine"] as const).map((f) =>
+                {(["all", "available", "mine"] as const).map((f) =>
                   f === "mine" && !account ? null : (
                     <button
                       key={f}
@@ -397,15 +459,37 @@ export default function Home() {
                   ),
                 )}
               </div>
-              <label className="flex items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm sm:w-64">
-                <SearchIcon className="h-4 w-4 text-muted" />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search title or location"
-                  className="w-full bg-transparent outline-none placeholder:text-muted"
-                />
-              </label>
+
+              <FilterSelect
+                value={typeFilter}
+                onChange={(v) => setTypeFilter(v === "" ? "" : Number(v))}
+                placeholder="Any type"
+                options={LISTING_TYPES.map((label, value) => ({ label, value }))}
+              />
+              <FilterSelect
+                value={categoryFilter}
+                onChange={(v) => setCategoryFilter(v === "" ? "" : Number(v))}
+                placeholder="Any category"
+                options={CATEGORIES.map((label, value) => ({ label, value }))}
+              />
+              <FilterSelect
+                value={regionFilter}
+                onChange={setRegionFilter}
+                placeholder="Any region"
+                options={REGIONS.map((region) => ({ label: region, value: region }))}
+              />
+              {filtersActive && (
+                <button
+                  onClick={() => {
+                    setTypeFilter("");
+                    setCategoryFilter("");
+                    setRegionFilter("");
+                  }}
+                  className="text-sm font-medium text-brand hover:underline"
+                >
+                  Clear
+                </button>
+              )}
             </div>
 
             {loading ? (
@@ -417,14 +501,14 @@ export default function Home() {
               <div className="flex flex-col items-center rounded-2xl border border-dashed border-line bg-surface px-6 py-14 text-center">
                 <HouseIcon className="h-10 w-10 text-muted" />
                 <p className="mt-3 font-semibold">
-                  {listings.length === 0 ? "No listings yet" : "Nothing matches your search"}
+                  {listings.length === 0 ? "No listings yet" : "Nothing matches these filters"}
                 </p>
                 <p className="mt-1 text-sm text-muted">
                   {listings.length === 0
                     ? account
                       ? "Post the first one using the form."
                       : "Connect your wallet to post the first one."
-                    : "Try a different filter or search term."}
+                    : "Try a different type, category or region."}
                 </p>
               </div>
             ) : (
@@ -435,7 +519,7 @@ export default function Home() {
                     listing={listing}
                     isMine={isMine(listing)}
                     busy={busy}
-                    onDeactivate={handleDeactivate}
+                    onSetStatus={handleSetStatus}
                   />
                 ))}
               </div>
@@ -443,7 +527,7 @@ export default function Home() {
           </section>
 
           {/* ── Post a listing ──────────────────────────────────────────── */}
-          <aside className="lg:sticky lg:top-24 lg:self-start">
+          <aside className="lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:self-start lg:overflow-y-auto">
             <div className="rounded-2xl border border-line bg-surface p-5 shadow-sm">
               <h2 className="text-lg font-semibold">Post a listing</h2>
 
@@ -462,53 +546,7 @@ export default function Home() {
                   </button>
                 </div>
               ) : (
-                <form onSubmit={handleCreate} className="mt-4 space-y-4">
-                  <Field label="Title">
-                    <input
-                      className="input"
-                      placeholder="3-bedroom house"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      required
-                    />
-                  </Field>
-                  <Field label="Location">
-                    <input
-                      className="input"
-                      placeholder="East Legon, Accra"
-                      value={location}
-                      onChange={(e) => setLocation(e.target.value)}
-                      required
-                    />
-                  </Field>
-                  <Field label="Price (ETH)">
-                    <input
-                      className="input"
-                      placeholder="2.5"
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={price}
-                      onChange={(e) => setPrice(e.target.value)}
-                      required
-                    />
-                  </Field>
-
-                  <button
-                    type="submit"
-                    disabled={busy || wrongNetwork}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-4 py-2.5 text-sm font-semibold text-on-brand hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {busy && <Spinner />}
-                    {busy ? "Working…" : "Create listing"}
-                  </button>
-
-                  <p className="flex gap-2 rounded-xl bg-surface-2 p-3 text-xs text-muted">
-                    <InfoIcon className="mt-0.5 h-4 w-4 shrink-0" />
-                    MetaMask will ask you to confirm and pay a small gas fee. Once mined, the listing is
-                    stored on the blockchain permanently.
-                  </p>
-                </form>
+                <CreateListingForm busy={busy} disabled={wrongNetwork} onSubmit={handleCreate} />
               )}
             </div>
           </aside>
@@ -516,8 +554,7 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-line py-6 text-center text-xs text-muted">
-        Contract{" "}
-        <span className="font-mono">{shortAddress(LISTING_BOARD_ADDRESS)}</span> on Hardhat Local (chain{" "}
+        Contract <span className="font-mono">{shortAddress(LISTING_BOARD_ADDRESS)}</span> on Hardhat Local (chain{" "}
         {hardhat.id}) · Test network: this ETH has no real value
       </footer>
     </div>
@@ -537,12 +574,30 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function FilterSelect<T extends string | number>({
+  value,
+  onChange,
+  placeholder,
+  options,
+}: {
+  value: T | "";
+  onChange: (value: string) => void;
+  placeholder: string;
+  options: { label: string; value: T }[];
+}) {
   return (
-    <label className="block space-y-1.5">
-      <span className="text-sm font-medium">{label}</span>
-      {children}
-    </label>
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded-xl border border-line bg-surface px-3 py-2 text-sm"
+    >
+      <option value="">{placeholder}</option>
+      {options.map((option) => (
+        <option key={option.label} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -573,30 +628,30 @@ function NetworkBadge({
   );
 }
 
-function StatusBanner({ status, onClose }: { status: Status; onClose: () => void }) {
+function NoticeBanner({ notice, onClose }: { notice: Notice; onClose: () => void }) {
   const styles = {
     info: "border-line bg-surface",
     pending: "border-line bg-surface",
     success: "border-success/30 bg-success-soft text-success",
     error: "border-danger/30 bg-danger-soft text-danger",
-  }[status.kind];
+  }[notice.kind];
 
   const icon = {
     info: <InfoIcon className="h-5 w-5" />,
     pending: <Spinner className="h-5 w-5" />,
     success: <CheckIcon className="h-5 w-5" />,
     error: <AlertIcon className="h-5 w-5" />,
-  }[status.kind];
+  }[notice.kind];
 
   return (
     <div role="status" className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${styles}`}>
       <span className="mt-0.5 shrink-0">{icon}</span>
       <div className="flex-1">
-        <p className="font-medium">{status.text}</p>
+        <p className="font-medium">{notice.text}</p>
         {/* The transaction hash is the transaction's permanent ID on the chain */}
-        {status.hash && <p className="mt-0.5 font-mono text-xs opacity-75">Tx {shortAddress(status.hash)}</p>}
+        {notice.hash && <p className="mt-0.5 font-mono text-xs opacity-75">Tx {shortAddress(notice.hash)}</p>}
       </div>
-      {status.kind !== "pending" && (
+      {notice.kind !== "pending" && (
         <button onClick={onClose} aria-label="Dismiss" className="shrink-0 opacity-60 hover:opacity-100">
           <CloseIcon className="h-4 w-4" />
         </button>
