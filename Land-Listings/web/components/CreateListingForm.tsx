@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent } from "react";
+import { gatewayUrl } from "../lib/ipfs";
 import {
   AMENITIES,
   CATEGORIES,
@@ -9,12 +10,18 @@ import {
   PricePeriod,
   REGIONS,
 } from "../lib/listingOptions";
-import { CloseIcon, InfoIcon, Spinner } from "./icons";
+import { Field } from "./Field";
+import { InfoIcon, Spinner } from "./icons";
+import type { OwnedProperty } from "./MyProperties";
+import { PhotoPicker } from "./PhotoPicker";
+import { useMetadata } from "./useMetadata";
 
 // Everything the seller fills in. The page splits it in two:
 //   - photos, title, description, address, amenities → IPFS (via /api/upload)
-//   - type, category, period, price, size, region     → on-chain (createListing)
+//   - property, type, category, period, price, size, region → on-chain (createListing)
 export type ListingFormValues = {
+  existingImages: string[]; // CIDs of the property's photos, already on IPFS: reused, not re-uploaded
+  propertyId: bigint | null; // which property NFT is being listed
   listingType: number;
   category: number;
   pricePeriod: number;
@@ -28,54 +35,52 @@ export type ListingFormValues = {
   photos: File[];
 };
 
-const MAX_PHOTOS = 6;
-
-const EMPTY: ListingFormValues = {
-  listingType: ListingType.Sale,
-  category: 0,
-  pricePeriod: PricePeriod.OneOff,
-  price: "",
-  sizeSqm: "",
-  region: "Greater Accra",
-  address: "",
-  title: "",
-  description: "",
-  amenities: [],
-  photos: [],
-};
+function emptyValues(propertyId: bigint | null): ListingFormValues {
+  return {
+    existingImages: [],
+    propertyId,
+    listingType: ListingType.Sale,
+    category: 0,
+    pricePeriod: PricePeriod.OneOff,
+    price: "",
+    sizeSqm: "",
+    region: "Greater Accra",
+    address: "",
+    title: "",
+    description: "",
+    amenities: [],
+    photos: [],
+  };
+}
 
 // Sensible default price period for each listing type
 const DEFAULT_PERIOD = [PricePeriod.OneOff, PricePeriod.PerMonth, PricePeriod.PerYear];
 
 type Props = {
+  properties: OwnedProperty[]; // the wallet's property NFTs: you can only list these
+  initialPropertyId: bigint | null;
   busy: boolean;
   disabled: boolean;
+  onRegisterFirst: () => void;
   // Returns true if the listing was created, so the form can clear itself.
   onSubmit: (values: ListingFormValues) => Promise<boolean>;
 };
 
-export function CreateListingForm({ busy, disabled, onSubmit }: Props) {
-  const [values, setValues] = useState<ListingFormValues>(EMPTY);
-  const [previews, setPreviews] = useState<string[]>([]); // local preview URLs for the photos
+export function CreateListingForm({ properties, initialPropertyId, busy, disabled, onRegisterFirst, onSubmit }: Props) {
+  const [values, setValues] = useState<ListingFormValues>(() =>
+    emptyValues(initialPropertyId ?? properties[0]?.id ?? null),
+  );
+  const [resetKey, setResetKey] = useState(0); // bumping this clears the photo picker
+
+  // The chosen property's details on IPFS: its photos and address are reused,
+  // so the owner doesn't have to upload the same pictures again.
+  const selected = properties.find((p) => p.id === values.propertyId);
+  const propertyMetadata = useMetadata(selected?.metadataCID);
+  const propertyImages = propertyMetadata?.images ?? [];
+  const photoCount = propertyImages.length + values.photos.length;
 
   function update<K extends keyof ListingFormValues>(key: K, value: ListingFormValues[K]) {
     setValues((v) => ({ ...v, [key]: value }));
-  }
-
-  function addPhotos(files: FileList | null) {
-    if (!files) return;
-    const room = MAX_PHOTOS - values.photos.length;
-    const added = Array.from(files).slice(0, room);
-    update("photos", [...values.photos, ...added]);
-    // createObjectURL makes a temporary local link so we can preview the
-    // photo before it's uploaded anywhere.
-    setPreviews((p) => [...p, ...added.map((file) => URL.createObjectURL(file))]);
-  }
-
-  function removePhoto(index: number) {
-    URL.revokeObjectURL(previews[index]);
-    update("photos", values.photos.filter((_, i) => i !== index));
-    setPreviews((p) => p.filter((_, i) => i !== index));
   }
 
   function toggleAmenity(amenity: string) {
@@ -89,18 +94,55 @@ export function CreateListingForm({ busy, disabled, onSubmit }: Props) {
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault(); // stop the browser reloading the page
-    const created = await onSubmit(values);
+    const created = await onSubmit({
+      ...values,
+      existingImages: propertyImages,
+      // Left blank? Use the address the property was registered with.
+      address: values.address.trim() || propertyMetadata?.address || "",
+    });
     if (created) {
-      previews.forEach((url) => URL.revokeObjectURL(url));
-      setPreviews([]);
-      setValues(EMPTY);
+      setValues(emptyValues(values.propertyId));
+      setResetKey((k) => k + 1);
     }
+  }
+
+  // Without a property NFT there's nothing you're allowed to list:
+  // the contract would reject it with NotAuthorizedForProperty.
+  if (properties.length === 0) {
+    return (
+      <div className="mt-3 space-y-4">
+        <p className="text-sm text-muted">
+          To list a property you must own its NFT. Register your property first, then come back here.
+        </p>
+        <button
+          onClick={onRegisterFirst}
+          className="w-full rounded-xl bg-brand px-4 py-2.5 text-sm font-semibold text-on-brand hover:bg-brand-strong"
+        >
+          Register a property
+        </button>
+      </div>
+    );
   }
 
   const isSale = values.listingType === ListingType.Sale;
 
   return (
     <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+      <Field label="Property" hint="The property NFT this listing is for">
+        <select
+          className="input"
+          value={values.propertyId?.toString() ?? ""}
+          onChange={(e) => update("propertyId", BigInt(e.target.value))}
+          required
+        >
+          {properties.map((property) => (
+            <option key={property.id.toString()} value={property.id.toString()}>
+              Property NFT #{property.id.toString()}
+            </option>
+          ))}
+        </select>
+      </Field>
+
       {/* Listing type: Sale / Rent / Lease */}
       <div className="grid grid-cols-3 gap-1 rounded-xl bg-surface-2 p-1 text-sm">
         {LISTING_TYPES.map((label, type) => (
@@ -164,7 +206,7 @@ export function CreateListingForm({ busy, disabled, onSubmit }: Props) {
         <Field label="Area / street">
           <input
             className="input"
-            placeholder="East Legon"
+            placeholder={propertyMetadata?.address || "East Legon"}
             value={values.address}
             onChange={(e) => update("address", e.target.value)}
           />
@@ -228,68 +270,52 @@ export function CreateListingForm({ busy, disabled, onSubmit }: Props) {
         </div>
       </div>
 
-      {/* Photos */}
-      <div className="space-y-1.5">
-        <span className="text-sm font-medium">
-          Photos <span className="font-normal text-muted">({values.photos.length}/{MAX_PHOTOS}, max 5 MB each)</span>
-        </span>
-        <div className="grid grid-cols-3 gap-2">
-          {previews.map((url, i) => (
-            <div key={url} className="relative aspect-square overflow-hidden rounded-lg">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={url} alt={`Photo ${i + 1}`} className="h-full w-full object-cover" />
-              <button
-                type="button"
-                onClick={() => removePhoto(i)}
-                className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white"
-                aria-label="Remove photo"
-              >
-                <CloseIcon className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
-          {values.photos.length < MAX_PHOTOS && (
-            <label className="flex aspect-square cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-line text-xs text-muted hover:border-brand hover:text-brand">
-              <span className="text-xl leading-none">+</span>
-              Add
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  addPhotos(e.target.files);
-                  e.target.value = ""; // allow picking the same file again
-                }}
+      {/* Photos from the property's registration: already on IPFS, reused by CID */}
+      {propertyImages.length > 0 && (
+        <div className="space-y-1.5">
+          <span className="text-sm font-medium">
+            Photos from your property <span className="font-normal text-muted">(already on IPFS, reused)</span>
+          </span>
+          <div className="grid grid-cols-3 gap-2">
+            {propertyImages.map((cid, i) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={cid}
+                src={gatewayUrl(cid)}
+                alt={`Property photo ${i + 1}`}
+                className="aspect-square w-full rounded-lg object-cover"
               />
-            </label>
-          )}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+
+      <PhotoPicker
+        key={resetKey}
+        label={propertyImages.length > 0 ? "Extra photos (optional)" : "Photos"}
+        onChange={(photos) => update("photos", photos)}
+      />
 
       <button
         type="submit"
-        disabled={busy || disabled || values.photos.length === 0}
+        disabled={busy || disabled || photoCount === 0 || values.propertyId === null}
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-4 py-2.5 text-sm font-semibold text-on-brand hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-50"
       >
         {busy && <Spinner />}
-        {busy ? "Working…" : values.photos.length === 0 ? "Add a photo to continue" : "Create listing"}
+        {busy
+          ? "Working…"
+          : propertyMetadata === undefined
+            ? "Loading property photos…"
+            : photoCount === 0
+              ? "Add a photo to continue"
+              : "Create listing"}
       </button>
 
       <p className="flex gap-2 rounded-xl bg-surface-2 p-3 text-xs text-muted">
         <InfoIcon className="mt-0.5 h-4 w-4 shrink-0" />
-        Photos and description are uploaded to IPFS first. Then MetaMask asks you to confirm one transaction that
-        stores the listing (with the IPFS fingerprint) on the blockchain.
+        The listing&apos;s details (and any extra photos) are uploaded to IPFS first. Then MetaMask asks you to confirm
+        one transaction. The contract checks with the property registry that you own this property before accepting it.
       </p>
     </form>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block space-y-1.5">
-      <span className="text-sm font-medium">{label}</span>
-      {children}
-    </label>
   );
 }

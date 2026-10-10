@@ -6,8 +6,9 @@
 // anything in browser code can be read by every visitor.
 //
 // Flow:
-//   1. The browser sends the photos + text details here.
-//   2. Each photo is uploaded to IPFS → we get back one CID per photo.
+//   1. The browser sends the photos + text details here (and, when listing a
+//      property, the CIDs of the photos it was registered with).
+//   2. Each NEW photo is uploaded to IPFS → we get back one CID per photo.
 //   3. A metadata JSON file (title, description, amenities, photo CIDs) is
 //      uploaded too → we get back ONE CID for the whole listing.
 //   4. That single metadataCID is returned to the browser, which then puts it
@@ -67,18 +68,28 @@ export async function POST(request: Request) {
   const photos = form
     .getAll("photos")
     .filter((item): item is File => item instanceof File && item.size > 0);
+  // Photos ALREADY on IPFS (e.g. from the property's registration), sent as
+  // CIDs. They don't need uploading again: the new metadata just points to
+  // the same CIDs. A file on IPFS can be referenced any number of times.
+  const existingImages = form.getAll("existingImages").map(String);
 
   if (!title) return badRequest("A title is required.");
-  if (photos.length === 0) return badRequest("Add at least one photo.");
-  if (photos.length > MAX_PHOTOS) return badRequest(`Add at most ${MAX_PHOTOS} photos.`);
+  if (photos.length + existingImages.length === 0) return badRequest("Add at least one photo.");
+  if (photos.length + existingImages.length > MAX_PHOTOS * 2) return badRequest("Too many photos.");
+  if (photos.length > MAX_PHOTOS) return badRequest(`Add at most ${MAX_PHOTOS} new photos.`);
+  for (const cid of existingImages) {
+    // A CID is letters and digits only. Reject anything else, so nobody can
+    // slip odd text into our metadata.
+    if (!/^[a-zA-Z0-9]{20,100}$/.test(cid)) return badRequest("Invalid photo CID.");
+  }
   for (const photo of photos) {
     if (!photo.type.startsWith("image/")) return badRequest(`"${photo.name}" isn't an image.`);
     if (photo.size > MAX_PHOTO_BYTES) return badRequest(`"${photo.name}" is larger than 5 MB.`);
   }
 
   try {
-    // Step 2: one CID per photo
-    const images: string[] = [];
+    // Step 2: one CID per NEW photo, added after any existing ones
+    const images: string[] = [...existingImages];
     for (const photo of photos) {
       images.push(await pinToIpfs(photo, photo.name, jwt));
     }

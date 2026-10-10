@@ -12,6 +12,7 @@ import {
   parseEther,
   formatEther,
   toHex,
+  parseEventLogs,
   BaseError,
   type Address,
   type EIP1193Provider,
@@ -20,9 +21,13 @@ import {
 // `hardhat` describes your local chain: chain ID 31337, RPC http://127.0.0.1:8545
 import { hardhat } from "viem/chains";
 import { LISTING_BOARD_ADDRESS, listingBoardAbi } from "../lib/listingBoard";
+import { PROPERTY_REGISTRY_ADDRESS, propertyRegistryAbi } from "../lib/propertyRegistry";
+import { deedHash, normalizeDeedNumber } from "../lib/deed";
 import { CATEGORIES, LISTING_TYPES, REGIONS, STATUSES, Status } from "../lib/listingOptions";
 import { ListingCard, ListingCardSkeleton, shortAddress, type Listing } from "../components/ListingCard";
 import { CreateListingForm, type ListingFormValues } from "../components/CreateListingForm";
+import { RegisterPropertyForm, type PropertyFormValues } from "../components/RegisterPropertyForm";
+import { MyProperties, type OwnedProperty } from "../components/MyProperties";
 import {
   AlertIcon,
   CheckIcon,
@@ -105,16 +110,57 @@ async function fetchListings(): Promise<Listing[]> {
 }
 
 // -----------------------------------------------------------------------------
+// READ: which property NFTs does this wallet own?
+// -----------------------------------------------------------------------------
+// We ask the registry `ownerOf(id)` for every property and keep the ones that
+// belong to `owner`. Fine for a handful; in Milestone 9, The Graph answers
+// this instantly from the ERC-721 Transfer events.
+async function fetchOwnedProperties(owner: Address): Promise<OwnedProperty[]> {
+  const total = await publicClient.readContract({
+    address: PROPERTY_REGISTRY_ADDRESS,
+    abi: propertyRegistryAbi,
+    functionName: "totalProperties",
+  });
+  const owned: OwnedProperty[] = [];
+  for (let id = 0n; id < total; id++) {
+    const holder = await publicClient.readContract({
+      address: PROPERTY_REGISTRY_ADDRESS,
+      abi: propertyRegistryAbi,
+      functionName: "ownerOf", // a standard ERC-721 function, inherited from OpenZeppelin
+      args: [id],
+    });
+    if (holder.toLowerCase() !== owner.toLowerCase()) continue;
+    const property = await publicClient.readContract({
+      address: PROPERTY_REGISTRY_ADDRESS,
+      abi: propertyRegistryAbi,
+      functionName: "getProperty",
+      args: [id],
+    });
+    owned.push({ id, ...property });
+  }
+  return owned;
+}
+
+// -----------------------------------------------------------------------------
 // OFF-CHAIN: upload photos + details to IPFS, get back ONE fingerprint (CID)
 // -----------------------------------------------------------------------------
 // This goes to our own /api/upload route (app/api/upload/route.ts), which
-// holds the secret Pinata key and does the actual upload.
-async function uploadToIpfs(values: ListingFormValues): Promise<string> {
+// holds the secret Pinata key and does the actual upload. Used for both
+// properties and listings.
+async function uploadToIpfs(values: {
+  title: string;
+  description: string;
+  address: string;
+  amenities?: string[];
+  photos: File[];
+  existingImages?: string[]; // CIDs already on IPFS: referenced again, not re-uploaded
+}): Promise<string> {
   const body = new FormData();
   body.append("title", values.title);
   body.append("description", values.description);
   body.append("address", values.address);
-  values.amenities.forEach((amenity) => body.append("amenities", amenity));
+  values.amenities?.forEach((amenity) => body.append("amenities", amenity));
+  values.existingImages?.forEach((cid) => body.append("existingImages", cid));
   values.photos.forEach((photo) => body.append("photos", photo));
 
   const res = await fetch("/api/upload", { method: "POST", body });
@@ -144,6 +190,10 @@ export default function Home() {
   const [typeFilter, setTypeFilter] = useState<number | "">("");
   const [categoryFilter, setCategoryFilter] = useState<number | "">("");
   const [regionFilter, setRegionFilter] = useState("");
+  // Property NFTs owned by the connected wallet, and the sidebar's state
+  const [properties, setProperties] = useState<OwnedProperty[]>([]);
+  const [sidebarTab, setSidebarTab] = useState<"list" | "register">("list");
+  const [listPropertyId, setListPropertyId] = useState<bigint | null>(null); // chosen via "List it"
 
   const wrongNetwork = account !== null && chainId !== null && chainId !== hardhat.id;
 
@@ -197,6 +247,26 @@ export default function Home() {
     });
     return unwatch; // stop listening when the page closes
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // MY PROPERTIES: load the wallet's property NFTs, and keep them up to date
+  // ---------------------------------------------------------------------------
+  // The registry emits PropertyRegistered when a property is created, and the
+  // standard ERC-721 Transfer event whenever an NFT changes hands. Either one
+  // can change which properties this wallet owns, so we re-read on both.
+  useEffect(() => {
+    if (!account || wrongNetwork) return;
+    const reload = () => fetchOwnedProperties(account).then(setProperties).catch(() => {});
+    reload();
+    const unwatch = publicClient.watchContractEvent({
+      address: PROPERTY_REGISTRY_ADDRESS,
+      abi: propertyRegistryAbi,
+      pollingInterval: 1_000,
+      onLogs: reload,
+    });
+    return unwatch;
+  }, [account, wrongNetwork]);
+  const myProperties = account && !wrongNetwork ? properties : [];
 
   // Follow what happens inside MetaMask.
   useEffect(() => {
@@ -280,15 +350,102 @@ export default function Home() {
   }
 
   // ---------------------------------------------------------------------------
-  // CREATE A LISTING: first IPFS (off-chain), then one transaction (on-chain)
+  // REGISTER A PROPERTY: this is the TOKENIZATION step. You receive an NFT.
   // ---------------------------------------------------------------------------
-  async function handleCreate(values: ListingFormValues): Promise<boolean> {
+  async function handleRegister(values: PropertyFormValues): Promise<boolean> {
     try {
       setBusy(true);
 
-      // 1. OFF-CHAIN: photos + details → IPFS. We get back one CID, a short
-      //    fingerprint of the whole bundle (~59 characters instead of megabytes).
+      // 1. Fingerprint the deed number. Only this hash goes on-chain.
+      const hash = deedHash(values.deedNumber);
+
+      // 2. A free READ first, to give a friendly message. (The contract would
+      //    reject a duplicate anyway with DeedAlreadyRegistered, but only
+      //    after the user had paid to upload the photos.)
+      const taken = await publicClient.readContract({
+        address: PROPERTY_REGISTRY_ADDRESS,
+        abi: propertyRegistryAbi,
+        functionName: "isDeedRegistered",
+        args: [hash],
+      });
+      if (taken) {
+        setNotice({
+          kind: "error",
+          text: `Deed ${normalizeDeedNumber(values.deedNumber)} is already registered. Each deed can only be registered once.`,
+        });
+        return false;
+      }
+
+      // 3. OFF-CHAIN: photos + details → IPFS
       setNotice({ kind: "pending", text: `Uploading ${values.photos.length} photo(s) and details to IPFS…` });
+      const metadataCID = await uploadToIpfs(values);
+
+      // 4. ON-CHAIN: mint the property NFT
+      setNotice({ kind: "pending", text: "Uploaded to IPFS ✔ Now confirm the registration in MetaMask…" });
+      const txHash = await getWalletClient().writeContract({
+        address: PROPERTY_REGISTRY_ADDRESS,
+        abi: propertyRegistryAbi,
+        functionName: "registerProperty",
+        args: [hash, metadataCID],
+      });
+      setNotice({ kind: "pending", text: "Transaction sent. Waiting for it to be mined…", hash: txHash });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+      // 5. Which token id did we get? It's inside the PropertyRegistered event,
+      //    in the transaction receipt's logs. `parseEventLogs` decodes the raw
+      //    logs using the ABI. This is reading an event straight from a receipt.
+      const [registered] = parseEventLogs({
+        abi: propertyRegistryAbi,
+        eventName: "PropertyRegistered",
+        logs: receipt.logs,
+      });
+      const propertyId = registered.args.propertyId;
+
+      setNotice({
+        kind: "success",
+        text: `Property registered! You now own Property NFT #${propertyId}. You can list it now.`,
+        hash: txHash,
+      });
+      setListPropertyId(propertyId);
+      setSidebarTab("list"); // take the user straight to listing it
+      if (account) {
+        setProperties(await fetchOwnedProperties(account));
+        await refreshBalance(account);
+      }
+      return true;
+    } catch (err) {
+      setNotice({ kind: "error", text: errorMessage(err) });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // "List it" on one of My properties
+  function startListing(propertyId: bigint) {
+    setListPropertyId(propertyId);
+    setSidebarTab("list");
+  }
+
+  // ---------------------------------------------------------------------------
+  // CREATE A LISTING: first IPFS (off-chain), then one transaction (on-chain)
+  // ---------------------------------------------------------------------------
+  async function handleCreate(values: ListingFormValues): Promise<boolean> {
+    const propertyId = values.propertyId;
+    if (propertyId === null) return false;
+    try {
+      setBusy(true);
+
+      // 1. OFF-CHAIN: details (+ any extra photos) → IPFS. The property's own
+      //    photos are already on IPFS, so they're included by CID only.
+      //    We get back one CID, a short fingerprint of the whole bundle.
+      setNotice({
+        kind: "pending",
+        text:
+          values.photos.length > 0
+            ? `Uploading ${values.photos.length} extra photo(s) and the listing details to IPFS…`
+            : "Saving the listing details to IPFS (reusing your property's photos)…",
+      });
       const metadataCID = await uploadToIpfs(values);
 
       // 2. SEND: viem encodes the call using the ABI and hands it to MetaMask.
@@ -304,6 +461,9 @@ export default function Home() {
         // object, matching keys to the struct's field names via the ABI.
         args: [
           {
+            // The contract asks the registry: does msg.sender own this NFT
+            // (or are they an approved agent)? If not: NotAuthorizedForProperty.
+            propertyId,
             listingType: values.listingType,
             category: values.category,
             pricePeriod: values.pricePeriod,
@@ -440,6 +600,9 @@ export default function Home() {
 
         {notice && <NoticeBanner notice={notice} onClose={() => setNotice(null)} />}
 
+        {/* ── My properties (the wallet's NFTs) ─────────────────────────── */}
+        <MyProperties properties={myProperties} onList={startListing} />
+
         <div className="grid gap-8 lg:grid-cols-[1fr_380px]">
           {/* ── Listings ────────────────────────────────────────────────── */}
           <section className="space-y-4">
@@ -526,17 +689,35 @@ export default function Home() {
             )}
           </section>
 
-          {/* ── Post a listing ──────────────────────────────────────────── */}
+          {/* ── Sidebar: list a property / register a property ──────────── */}
           <aside className="lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:self-start lg:overflow-y-auto">
             <div className="rounded-2xl border border-line bg-surface p-5 shadow-sm">
-              <h2 className="text-lg font-semibold">Post a listing</h2>
+              {/* Two steps, two contracts: register (PropertyRegistry) → list (ListingBoard) */}
+              <div className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 p-1 text-sm">
+                {(
+                  [
+                    ["list", "List a property"],
+                    ["register", "Register property"],
+                  ] as const
+                ).map(([tab, label]) => (
+                  <button
+                    key={tab}
+                    onClick={() => setSidebarTab(tab)}
+                    className={`rounded-lg py-2 font-semibold ${
+                      sidebarTab === tab ? "bg-surface shadow-sm" : "text-muted hover:text-foreground"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
 
-              {/* The form is only usable once a wallet is connected,
-                  because creating a listing needs a signed transaction */}
+              {/* The forms are only usable once a wallet is connected,
+                  because both actions need a signed transaction */}
               {!account ? (
-                <div className="mt-3 space-y-4">
+                <div className="mt-4 space-y-4">
                   <p className="text-sm text-muted">
-                    Posting a listing is a blockchain transaction, so you need a wallet to sign it.
+                    Registering and listing are blockchain transactions, so you need a wallet to sign them.
                   </p>
                   <button
                     onClick={connectWallet}
@@ -545,8 +726,19 @@ export default function Home() {
                     <WalletIcon /> Connect wallet
                   </button>
                 </div>
+              ) : sidebarTab === "register" ? (
+                <RegisterPropertyForm busy={busy} disabled={wrongNetwork} onSubmit={handleRegister} />
               ) : (
-                <CreateListingForm busy={busy} disabled={wrongNetwork} onSubmit={handleCreate} />
+                <CreateListingForm
+                  // A new key when the chosen property changes resets the form to it
+                  key={`${listPropertyId ?? "none"}-${myProperties.length}`}
+                  properties={myProperties}
+                  initialPropertyId={listPropertyId}
+                  busy={busy}
+                  disabled={wrongNetwork}
+                  onRegisterFirst={() => setSidebarTab("register")}
+                  onSubmit={handleCreate}
+                />
               )}
             </div>
           </aside>

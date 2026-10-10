@@ -11,7 +11,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { network } from "hardhat";
-import { parseEther, getAddress } from "viem";
+import { parseEther, getAddress, keccak256, toBytes } from "viem";
+
 
 // -----------------------------------------------------------------------------
 // Enum values, matching the order in the contract.
@@ -30,6 +31,7 @@ const SAMPLE_CID = "bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy"
 // The shape of the contract's NewListing struct, as viem expects it.
 // uint256 → bigint, uint8/uint32 (enums, sizeSqm) → number.
 type NewListingInput = {
+  propertyId: bigint;
   listingType: number;
   category: number;
   pricePeriod: number;
@@ -43,6 +45,7 @@ type NewListingInput = {
 // `overrides`, e.g. newListing({ priceWei: 0n }) to test a zero price.
 function newListing(overrides: Partial<NewListingInput> = {}): NewListingInput {
   return {
+    propertyId: 0n, // property #0, which the fixture registers for `seller`
     listingType: ListingType.Sale,
     category: Category.Land,
     pricePeriod: PricePeriod.OneOff,
@@ -63,19 +66,25 @@ describe("ListingBoard v2", async function () {
 
   // Fixture: deploys a fresh contract. `loadFixture` snapshots the chain after
   // the first run and rewinds to it before each test, so every test starts clean.
+  // Deploys BOTH contracts, wired together, and registers property #0 for `seller`.
   async function deployListingBoard() {
-    const listingBoard = await viem.deployContract("ListingBoard");
-    return { listingBoard };
+    const registry = await viem.deployContract("PropertyRegistry");
+    // The constructor argument goes in an array: the registry's address
+    const listingBoard = await viem.deployContract("ListingBoard", [registry.address]);
+    await registry.write.registerProperty([keccak256(toBytes("GA-12345-2019")), SAMPLE_CID], {
+      account: seller.account,
+    });
+    return { listingBoard, registry };
   }
 
   // A second fixture that also creates one listing (id 0) owned by `seller`.
   // Many tests need an existing listing to work with.
+ // Same, plus one listing (id 0) for that property
   async function deployWithOneListing() {
-    const listingBoard = await viem.deployContract("ListingBoard");
+    const { listingBoard, registry } = await deployListingBoard();
     await listingBoard.write.createListing([newListing()], { account: seller.account });
-    return { listingBoard };
+    return { listingBoard, registry };
   }
-
   // ===========================================================================
   // CREATING LISTINGS
   // ===========================================================================
@@ -122,9 +131,10 @@ describe("ListingBoard v2", async function () {
       listingBoard.write.createListing([newListing()], { account: seller.account }),
       listingBoard,
       "ListingCreated",
-      [
+           [
         0n,
         getAddress(seller.account.address),
+        0n, // ← propertyId
         Category.Land,
         ListingType.Sale,
         PricePeriod.OneOff,
@@ -133,6 +143,7 @@ describe("ListingBoard v2", async function () {
         "Greater Accra",
         SAMPLE_CID,
       ],
+
     );
   });
 
@@ -277,4 +288,52 @@ describe("ListingBoard v2", async function () {
       [7n],
     );
   });
+
+
+    // ===========================================================================
+  // PROPERTY OWNERSHIP: the anti-fraud check
+  // ===========================================================================
+
+  // SECURITY: you can't list a property you don't own
+  it("does not let a stranger list someone else's property", async function () {
+    const { listingBoard } = await networkHelpers.loadFixture(deployListingBoard);
+
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.createListing([newListing()], { account: stranger.account }),
+      listingBoard,
+      "NotAuthorizedForProperty",
+      [0n, getAddress(stranger.account.address)],
+    );
+    assert.equal(await listingBoard.read.totalListings(), 0n);
+  });
+
+  it("lets an agent the owner approved list the property", async function () {
+    const { listingBoard, registry } = await networkHelpers.loadFixture(deployListingBoard);
+    const agent = stranger;
+
+    // The owner approves the agent for ALL their properties (standard ERC-721)
+    await registry.write.setApprovalForAll([agent.account.address, true], { account: seller.account });
+
+    await listingBoard.write.createListing([newListing()], { account: agent.account });
+    const listing = await listingBoard.read.getListing([0n]);
+    assert.equal(getAddress(listing.owner), getAddress(agent.account.address)); // the agent manages it
+    assert.equal(listing.propertyId, 0n);
+  });
+
+  it("rejects a listing for a property that was never registered", async function () {
+    const { listingBoard, registry } = await networkHelpers.loadFixture(deployListingBoard);
+
+    // Property #99 doesn't exist, so when ListingBoard asks the registry
+    // ownerOf(99), the REGISTRY reverts with OpenZeppelin's custom error
+    // ERC721NonexistentToken(99), and that revert stops createListing too.
+    // We pass `registry` (not listingBoard) because the error is defined in
+    // the registry's ABI: that's how viem knows how to decode it.
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      listingBoard.write.createListing([newListing({ propertyId: 99n })], { account: seller.account }),
+      registry,
+      "ERC721NonexistentToken",
+      [99n],
+    );
+  });
+
 });

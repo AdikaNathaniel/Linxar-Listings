@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { formatEther, type Address } from "viem";
-import { fetchMetadata, gatewayUrl, type ListingMetadata } from "../lib/ipfs";
+import { gatewayUrl, type ListingMetadata } from "../lib/ipfs";
 import { CATEGORIES, LISTING_TYPES, PRICE_PERIODS, STATUSES, Status } from "../lib/listingOptions";
 import { CloseIcon, HouseIcon, PinIcon } from "./icons";
+import { useMetadata } from "./useMetadata";
 
 // The shape of one listing as the contract returns it (see the Listing struct).
 // uint256/uint64 → bigint; enums and uint32 → number.
 export type Listing = {
   id: bigint;
+  propertyId: bigint; // the property NFT this listing is for
   owner: Address;
   listingType: number;
   category: number;
@@ -47,22 +49,6 @@ const STATUS_STYLES = [
 
 function formatPrice(listing: Listing) {
   return `${formatEther(listing.priceWei)} ETH ${PRICE_PERIODS[listing.pricePeriod] ?? ""}`.trim();
-}
-
-// Loads a listing's details from IPFS. While loading, `metadata` is undefined;
-// if it can't be loaded, it's null.
-function useMetadata(cid: string) {
-  const [metadata, setMetadata] = useState<ListingMetadata | null | undefined>(undefined);
-  useEffect(() => {
-    let cancelled = false;
-    fetchMetadata(cid).then((result) => {
-      if (!cancelled) setMetadata(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [cid]);
-  return metadata;
 }
 
 type Props = {
@@ -248,7 +234,11 @@ function ListingDetails({
             <dd>#{listing.id.toString()}</dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt>Owner (on-chain)</dt>
+            <dt>Property NFT (on-chain)</dt>
+            <dd>#{listing.propertyId.toString()}</dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt>Listed by (on-chain)</dt>
             <dd>{shortAddress(listing.owner)}</dd>
           </div>
           <div className="flex justify-between gap-4">
