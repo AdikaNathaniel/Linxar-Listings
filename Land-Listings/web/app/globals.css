@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/* LinXar colour tokens. Components use these through Tailwind classes such as
+   bg-surface, text-muted, border-line, bg-brand, so light and dark mode switch
+   automatically. */
+:root {
+  --background: #f6f4ef; /* warm sand page background */
+  --foreground: #1c2321;
+  --surface: #ffffff; /* cards and panels */
+  --surface-2: #efece4; /* inputs, subtle fills */
+  --line: #e2ded3; /* borders */
+  --muted: #66706b; /* secondary text */
+  --brand: #0f5c4d; /* LinXar green */
+  --brand-strong: #0b4539;
+  --brand-soft: #e3f0ec;
+  --on-brand: #ffffff; /* text on brand-coloured buttons */
+  --accent: #b7841a; /* gold, used for prices */
+  --danger: #b4232c;
+  --danger-soft: #fbe9ea;
+  --success: #1e7a46;
+  --success-soft: #e5f4ea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0f1513;
+    --foreground: #e8ece9;
+    --surface: #161e1b;
+    --surface-2: #1d2724;
+    --line: #2a3632;
+    --muted: #94a19b;
+    --brand: #3fb89a;
+    --brand-strong: #5fd0b2;
+    --brand-soft: #173a31;
+    --on-brand: #0b1a16;
+    --accent: #e0b04a;
+    --danger: #f07178;
+    --danger-soft: #3a1c1f;
+    --success: #5ccf8a;
+    --success-soft: #16301f;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+  --color-on-brand: var(--on-brand);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Shared style for form inputs */
+@layer components {
+  .input {
+    @apply w-full rounded-xl border border-line bg-surface-2 px-3 py-2.5 text-sm outline-none placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/20;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
