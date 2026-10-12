@@ -94,12 +94,13 @@ export function RegisterPropertyForm({ busy, disabled, onSubmit }: Props) {
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-4 py-2.5 text-sm font-semibold text-on-brand hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-50"
       >
         {busy && <Spinner />}
-        {busy ? "Working…" : values.photos.length === 0 ? "Add a photo to continue" : "Register property"}
+        {busy ? "Working…" : values.photos.length === 0 ? "Add a photo to continue" : "Submit for verification"}
       </button>
 
       <p className="flex gap-2 rounded-xl bg-surface-2 p-3 text-xs text-muted">
         <InfoIcon className="mt-0.5 h-4 w-4 shrink-0" />
-        You&apos;ll receive an NFT: the on-chain record of this property. Only a fingerprint (hash) of the deed number
+        This sends a registration REQUEST. A verifier checks your deed (e.g. with the Lands Commission) and, if it&apos;s
+        genuine, approves it, and only then is your property NFT created. Only a fingerprint (hash) of the deed number
         goes on-chain, and each deed can only ever be registered once.
       </p>
     </form>

@@ -71,9 +71,16 @@ describe("ListingBoard v2", async function () {
     const registry = await viem.deployContract("PropertyRegistry");
     // The constructor argument goes in an array: the registry's address
     const listingBoard = await viem.deployContract("ListingBoard", [registry.address]);
-    await registry.write.registerProperty([keccak256(toBytes("GA-12345-2019")), SAMPLE_CID], {
+    // Milestone 7: a property NFT is only created when a VERIFIER approves a
+    // request. `seller` deployed the registry, so they're its admin, and for
+    // this test they appoint themselves verifier to approve their own request.
+    await registry.write.grantRole([await registry.read.VERIFIER_ROLE(), seller.account.address], {
       account: seller.account,
     });
+    await registry.write.requestRegistration([keccak256(toBytes("GA-12345-2019")), SAMPLE_CID], {
+      account: seller.account,
+    });
+    await registry.write.approveRegistration([0n], { account: seller.account });
     return { listingBoard, registry };
   }
 

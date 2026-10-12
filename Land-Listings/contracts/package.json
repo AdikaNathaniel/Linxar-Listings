@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "chain": "hardhat node",
-    "deploy:local": "hardhat ignition deploy ignition/modules/LinXar.ts --network localhost --reset && node scripts/export-to-web.ts",
-    "export": "node scripts/export-to-web.ts",
+    "deploy:local": "hardhat ignition deploy ignition/modules/LinXar.ts --network localhost --parameters ignition/parameters/localhost.json --reset && node scripts/export-to-web.ts localhost",
+    "deploy:sepolia": "hardhat ignition deploy ignition/modules/LinXar.ts --network sepolia --parameters ignition/parameters/sepolia.json --verify && node scripts/export-to-web.ts sepolia",
+    "use:local": "node scripts/export-to-web.ts localhost",
+    "use:sepolia": "node scripts/export-to-web.ts sepolia",
     "test": "hardhat test"
   },
   "devDependencies": {

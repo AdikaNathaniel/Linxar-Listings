@@ -1,0 +1,67 @@
+# =============================================================================
+# Deploy the LinXar website to IPFS on every push
+# =============================================================================
+# GitHub runs this on its own servers ("runners"):
+#   1. download the code   2. install packages   3. build the static site
+#   4. upload web/out/ to IPFS via Pinata → a new CID for the new version
+# The CID and links appear on the run's summary page (Actions tab on GitHub).
+#
+# Secrets come from: GitHub repo → Settings → Secrets and variables → Actions.
+# They're never shown in logs, and never stored in the code.
+# =============================================================================
+name: Deploy website to IPFS
+
+on:
+  push:
+    branches: [main]
+    # Only when the website (or this file) changed: contract or subgraph
+    # changes don't need a new website version
+    paths:
+      - "Land-Listings/web/**"
+      - ".github/workflows/deploy-site.yml"
+  # Also allows a manual run: Actions tab → this workflow → "Run workflow"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Land-Listings/web
+
+    steps:
+      - name: Download the code
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: Land-Listings/web/package-lock.json
+
+      # Safety check: the published site must use the PUBLIC contracts.
+      # (`npm run use:local` in contracts/ rewrites this file for local testing;
+      # don't commit it in that state.)
+      - name: Check the site points at Sepolia
+        run: |
+          if ! grep -q 'export const NETWORK = "sepolia"' lib/contracts.generated.ts; then
+            echo "::error::web/lib/contracts.generated.ts points at the LOCAL chain. Run 'npm run use:sepolia' in contracts/, then commit and push again."
+            exit 1
+          fi
+
+      - name: Install packages
+        run: npm ci
+
+      # NEXT_PUBLIC_ values are baked into the static files at build time
+      - name: Build the static site
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SEPOLIA_RPC_URL: ${{ secrets.NEXT_PUBLIC_SEPOLIA_RPC_URL }}
+          NEXT_PUBLIC_GATEWAY_URL: ${{ secrets.NEXT_PUBLIC_GATEWAY_URL }}
+          NEXT_PUBLIC_UPLOAD_URL: ${{ secrets.NEXT_PUBLIC_UPLOAD_URL }}
+
+      - name: Publish to IPFS
+        run: node scripts/pin-site.mjs
+        env:
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}

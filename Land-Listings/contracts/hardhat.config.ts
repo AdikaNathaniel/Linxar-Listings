@@ -31,8 +31,16 @@ export default defineConfig({
     sepolia: {
       type: "http",
       chainType: "l1",
+      // Both values come from the encrypted keystore (`npx hardhat keystore set …`)
       url: configVariable("SEPOLIA_RPC_URL"),
       accounts: [configVariable("SEPOLIA_PRIVATE_KEY")],
+    },
+  },
+  // Publishing the contracts' SOURCE CODE on Etherscan ("verifying"), so
+  // anyone can read exactly what the deployed bytecode does.
+  verify: {
+    etherscan: {
+      apiKey: configVariable("ETHERSCAN_API_KEY"),
     },
   },
 });

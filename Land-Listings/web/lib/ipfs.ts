@@ -14,6 +14,11 @@ export type ListingMetadata = {
   address: string; // street / area, e.g. "East Legon"
   amenities: string[];
   images: string[]; // CIDs of the photos, each one also stored on IPFS
+  // Property registration requests only: the deed number, so a verifier can
+  // check it with the Lands Commission AND confirm it matches the on-chain
+  // hash. ⚠️ Everything on IPFS is public; a real platform would share it
+  // privately instead (e.g. over XMTP, Milestone 10).
+  deedNumber?: string;
 };
 
 const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL;

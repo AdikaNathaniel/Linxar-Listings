@@ -1,0 +1,98 @@
+# =============================================================================
+# The LinXar subgraph's SCHEMA: the "tables" The Graph builds from our events
+# =============================================================================
+# Each `type … @entity` is like a database table. The Graph creates and
+# updates these records in the handlers (src/*.ts) whenever our contracts emit
+# an event. The website then QUERIES them with GraphQL: one request for
+# exactly the data it needs, with filters and sorting.
+#
+# Enum fields (category, status…) are stored as the same small numbers the
+# contracts use (e.g. Category: 0 Residential, 1 Commercial, 2 Industrial, 3 Land).
+# `immutable: false` means a record can be updated after it's created.
+# =============================================================================
+
+# A property NFT (PropertyRegistry)
+type Property @entity(immutable: false) {
+  id: ID! # the token id, as text
+  tokenId: BigInt!
+  owner: Bytes! # kept up to date from the ERC-721 Transfer event
+  deedHash: Bytes!
+  metadataCID: String!
+  registeredAt: BigInt!
+  # Every listing this property has ever had. `@derivedFrom` isn't stored:
+  # The Graph works it out from Listing.property when you query it.
+  listings: [Listing!]! @derivedFrom(field: "property")
+}
+
+# An owner's application to register a property (PropertyRegistry)
+type RegistrationRequest @entity(immutable: false) {
+  id: ID! # the request id
+  requestId: BigInt!
+  applicant: Bytes!
+  deedHash: Bytes!
+  metadataCID: String!
+  status: Int! # 0 Pending, 1 Approved, 2 Rejected
+  submittedAt: BigInt!
+  reviewedBy: Bytes
+  # Only in the RegistrationRejected EVENT, not in contract storage. The
+  # subgraph saves it, so the website no longer has to search event logs.
+  rejectionReason: String
+  property: Property # set when approved
+}
+
+# A listing: the advert for a property (ListingBoard)
+type Listing @entity(immutable: false) {
+  id: ID! # the listing id
+  listingId: BigInt!
+  property: Property!
+  propertyId: BigInt!
+  owner: Bytes! # who listed it (the owner, or an approved agent)
+  # Links to the lister's Agent record if they've ever had a badge.
+  # Query `agent { verified }` to show the ✔ Verified agent badge.
+  agent: Agent
+  category: Int! # 0 Residential, 1 Commercial, 2 Industrial, 3 Land
+  listingType: Int! # 0 Sale, 1 Rent, 2 Lease
+  status: Int! # 0 Available, 1 UnderOffer, 2 Rented, 3 Sold, 4 Withdrawn
+  pricePeriod: Int! # 0 OneOff, 1 PerMonth, 2 PerYear
+  priceWei: BigInt!
+  sizeSqm: BigInt!
+  region: String!
+  metadataCID: String!
+  createdAt: BigInt!
+  updatedAt: BigInt!
+  deals: [Deal!]! @derivedFrom(field: "listing")
+}
+
+# An escrow deal (Escrow)
+type Deal @entity(immutable: false) {
+  id: ID! # the deal id
+  dealId: BigInt!
+  listing: Listing!
+  listingId: BigInt!
+  propertyId: BigInt!
+  buyer: Bytes!
+  seller: Bytes!
+  kind: Int! # 0 Purchase, 1 RentalDeposit
+  status: Int! # 0 Funded, 1 Accepted, 2 Completed, 3 Refunded, 4 Disputed
+  amount: BigInt! # wei locked in the escrow
+  createdAt: BigInt!
+  acceptedAt: BigInt!
+  disputedBy: Bytes
+}
+
+# Money the escrow owes an address (mirrors Escrow.pendingWithdrawals)
+type Account @entity(immutable: false) {
+  id: ID! # the address
+  pendingWithdrawal: BigInt!
+  totalWithdrawn: BigInt!
+}
+
+# A Verified Agent badge holder, past or present (AgentBadge)
+type Agent @entity(immutable: false) {
+  id: ID! # the agent's address
+  verified: Boolean! # false once revoked
+  profileCID: String
+  verifiedBy: Bytes
+  verifiedAt: BigInt
+  revokedAt: BigInt
+}

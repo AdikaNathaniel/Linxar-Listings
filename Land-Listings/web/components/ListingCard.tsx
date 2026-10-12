@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { formatEther, type Address } from "viem";
+import { useState, type FormEvent } from "react";
+import { formatEther, parseEther, type Address } from "viem";
 import { gatewayUrl, type ListingMetadata } from "../lib/ipfs";
-import { CATEGORIES, LISTING_TYPES, PRICE_PERIODS, STATUSES, Status } from "../lib/listingOptions";
+import { CATEGORIES, LISTING_TYPES, ListingType, PRICE_PERIODS, STATUSES, Status } from "../lib/listingOptions";
 import { CloseIcon, HouseIcon, PinIcon } from "./icons";
 import { useMetadata } from "./useMetadata";
 
@@ -55,10 +55,25 @@ type Props = {
   listing: Listing;
   isMine: boolean;
   busy: boolean;
+  canOffer: boolean; // a connected wallet that isn't the owner, on an Available listing
+  verifiedAgent: boolean; // the lister holds a soulbound AgentBadge
   onSetStatus: (id: bigint, status: number) => void;
+  // Locks `amountWei` in the escrow for this listing. Returns true on success.
+  onMakeOffer: (listing: Listing, amountWei: bigint) => Promise<boolean>;
+  // Opens an XMTP chat with the lister (Milestone 10). Undefined = not available.
+  onMessage?: (listing: Listing, title: string) => void;
 };
 
-export function ListingCard({ listing, isMine, busy, onSetStatus }: Props) {
+export function ListingCard({
+  listing,
+  isMine,
+  busy,
+  canOffer,
+  verifiedAgent,
+  onSetStatus,
+  onMakeOffer,
+  onMessage,
+}: Props) {
   const metadata = useMetadata(listing.metadataCID);
   const [open, setOpen] = useState(false);
   const placeholder = PLACEHOLDERS[Number(listing.id % BigInt(PLACEHOLDERS.length))];
@@ -129,7 +144,25 @@ export function ListingCard({ listing, isMine, busy, onSetStatus }: Props) {
             <span className="flex items-center gap-2 text-xs text-muted">
               <span className="font-mono">{shortAddress(listing.owner)}</span>
               {isMine && <span className="rounded-full bg-brand-soft px-2 py-0.5 font-medium text-brand">You</span>}
+              {/* Read from the AgentBadge contract: can't be faked, because only a verifier can issue it */}
+              {verifiedAgent && (
+                <span
+                  className="rounded-full bg-success-soft px-2 py-0.5 font-semibold text-success"
+                  title="Holds a soulbound Verified Agent badge"
+                >
+                  ✔ Verified agent
+                </span>
+              )}
             </span>
+
+            {canOffer && (
+              <button
+                onClick={() => setOpen(true)}
+                className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-on-brand hover:bg-brand-strong"
+              >
+                {listing.listingType === ListingType.Sale ? "Buy" : "Pay deposit"}
+              </button>
+            )}
 
             {/* Only the owner sees this control. The CONTRACT enforces the rule
                 regardless (onlyListingOwner): the control is just a convenience */}
@@ -152,20 +185,45 @@ export function ListingCard({ listing, isMine, busy, onSetStatus }: Props) {
         </div>
       </article>
 
-      {open && <ListingDetails listing={listing} metadata={metadata} onClose={() => setOpen(false)} />}
+      {open && (
+        <ListingDetails
+          listing={listing}
+          metadata={metadata}
+          canOffer={canOffer}
+          busy={busy}
+          onMakeOffer={onMakeOffer}
+          onMessage={
+            onMessage && !isMine
+              ? () => {
+                  setOpen(false);
+                  onMessage(listing, metadata?.title ?? `Listing #${listing.id}`);
+                }
+              : undefined
+          }
+          onClose={() => setOpen(false)}
+        />
+      )}
     </>
   );
 }
 
-// Full details in an overlay: description, all photos, amenities, and the
-// on-chain facts that prove where the data comes from.
+// Full details in an overlay: description, all photos, amenities, the
+// on-chain facts that prove where the data comes from, and the offer box.
 function ListingDetails({
   listing,
   metadata,
+  canOffer,
+  busy,
+  onMakeOffer,
+  onMessage,
   onClose,
 }: {
   listing: Listing;
   metadata: ListingMetadata | null | undefined;
+  canOffer: boolean;
+  busy: boolean;
+  onMakeOffer: (listing: Listing, amountWei: bigint) => Promise<boolean>;
+  onMessage?: () => void;
   onClose: () => void;
 }) {
   return (
@@ -254,8 +312,78 @@ function ListingDetails({
             </dd>
           </div>
         </dl>
+
+        {/* Milestone 10: chat with the lister over XMTP (questions, visit requests) */}
+        {onMessage && (
+          <button
+            onClick={onMessage}
+            className="mt-5 w-full rounded-xl border border-brand px-4 py-2.5 text-sm font-semibold text-brand hover:bg-brand-soft"
+          >
+            💬 Message seller · request a visit
+          </button>
+        )}
+
+        {canOffer && (
+          <OfferBox listing={listing} busy={busy} onMakeOffer={onMakeOffer} onDone={onClose} />
+        )}
       </div>
     </div>
+  );
+}
+
+// The buyer's side of the escrow: lock money in the contract for this listing.
+//   For sale  → pay the exact price (the contract checks it).
+//   For rent / lease → pay a deposit of your choice (default: one period's rent).
+function OfferBox({
+  listing,
+  busy,
+  onMakeOffer,
+  onDone,
+}: {
+  listing: Listing;
+  busy: boolean;
+  onMakeOffer: (listing: Listing, amountWei: bigint) => Promise<boolean>;
+  onDone: () => void;
+}) {
+  const isSale = listing.listingType === ListingType.Sale;
+  const [deposit, setDeposit] = useState(formatEther(listing.priceWei));
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const amountWei = isSale ? listing.priceWei : parseEther(deposit || "0");
+    if (await onMakeOffer(listing, amountWei)) onDone();
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-5 space-y-3 rounded-2xl border border-brand/30 bg-brand-soft p-4">
+      <h3 className="font-semibold text-brand">{isSale ? "Buy this property" : "Pay a deposit"}</h3>
+      {!isSale && (
+        <label className="block space-y-1.5">
+          <span className="text-sm font-medium">Deposit (ETH)</span>
+          <input
+            className="input"
+            type="number"
+            step="any"
+            min="0"
+            value={deposit}
+            onChange={(e) => setDeposit(e.target.value)}
+            required
+          />
+        </label>
+      )}
+      <p className="text-xs text-muted">
+        Your ETH goes into the <strong>escrow contract</strong>, not to the seller. It&apos;s only released when you
+        confirm the deal{isSale ? " (and the property NFT then moves to you in the same transaction)" : ""}. Until the
+        seller accepts, you can cancel and get it all back.
+      </p>
+      <button
+        type="submit"
+        disabled={busy}
+        className="w-full rounded-xl bg-brand px-4 py-2.5 text-sm font-semibold text-on-brand hover:bg-brand-strong disabled:opacity-50"
+      >
+        {isSale ? `Pay ${formatEther(listing.priceWei)} ETH into escrow` : `Pay ${deposit || "0"} ETH deposit into escrow`}
+      </button>
+    </form>
   );
 }
 

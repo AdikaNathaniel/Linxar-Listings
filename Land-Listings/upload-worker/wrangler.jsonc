@@ -1,0 +1,9 @@
+// Cloudflare Worker settings (read by `wrangler`, Cloudflare's CLI)
+{
+  // The Worker's name: its address becomes https://linxar-upload.<your-subdomain>.workers.dev
+  "name": "linxar-upload",
+  "main": "src/index.ts",
+  // Which version of the Workers runtime to run on
+  "compatibility_date": "2026-10-01",
+  // The secret PINATA_JWT is NOT here: set it with `npx wrangler secret put PINATA_JWT`
+}

@@ -1,0 +1,422 @@
+[
+    {
+        "inputs":  [
+                       {
+                           "internalType":  "contract IERC721",
+                           "name":  "registry",
+                           "type":  "address"
+                       }
+                   ],
+        "stateMutability":  "nonpayable",
+        "type":  "constructor"
+    },
+    {
+        "inputs":  [
+                       {
+                           "internalType":  "string",
+                           "name":  "reason",
+                           "type":  "string"
+                       }
+                   ],
+        "name":  "InvalidListing",
+        "type":  "error"
+    },
+    {
+        "inputs":  [
+                       {
+                           "internalType":  "uint256",
+                           "name":  "id",
+                           "type":  "uint256"
+                       }
+                   ],
+        "name":  "ListingNotFound",
+        "type":  "error"
+    },
+    {
+        "inputs":  [
+                       {
+                           "internalType":  "uint256",
+                           "name":  "propertyId",
+                           "type":  "uint256"
+                       },
+                       {
+                           "internalType":  "address",
+                           "name":  "caller",
+                           "type":  "address"
+                       }
+                   ],
+        "name":  "NotAuthorizedForProperty",
+        "type":  "error"
+    },
+    {
+        "inputs":  [
+                       {
+                           "internalType":  "uint256",
+                           "name":  "id",
+                           "type":  "uint256"
+                       },
+                       {
+                           "internalType":  "address",
+                           "name":  "caller",
+                           "type":  "address"
+                       }
+                   ],
+        "name":  "NotListingOwner",
+        "type":  "error"
+    },
+    {
+        "anonymous":  false,
+        "inputs":  [
+                       {
+                           "indexed":  true,
+                           "internalType":  "uint256",
+                           "name":  "id",
+                           "type":  "uint256"
+                       },
+                       {
+                           "indexed":  true,
+                           "internalType":  "address",
+                           "name":  "owner",
+                           "type":  "address"
+                       },
+                       {
+                           "indexed":  true,
+                           "internalType":  "uint256",
+                           "name":  "propertyId",
+                           "type":  "uint256"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "enum ListingBoard.Category",
+                           "name":  "category",
+                           "type":  "uint8"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "enum ListingBoard.ListingType",
+                           "name":  "listingType",
+                           "type":  "uint8"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "enum ListingBoard.PricePeriod",
+                           "name":  "pricePeriod",
+                           "type":  "uint8"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "uint256",
+                           "name":  "priceWei",
+                           "type":  "uint256"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "uint32",
+                           "name":  "sizeSqm",
+                           "type":  "uint32"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "string",
+                           "name":  "region",
+                           "type":  "string"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "string",
+                           "name":  "metadataCID",
+                           "type":  "string"
+                       }
+                   ],
+        "name":  "ListingCreated",
+        "type":  "event"
+    },
+    {
+        "anonymous":  false,
+        "inputs":  [
+                       {
+                           "indexed":  true,
+                           "internalType":  "uint256",
+                           "name":  "id",
+                           "type":  "uint256"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "enum ListingBoard.Status",
+                           "name":  "status",
+                           "type":  "uint8"
+                       }
+                   ],
+        "name":  "ListingStatusChanged",
+        "type":  "event"
+    },
+    {
+        "anonymous":  false,
+        "inputs":  [
+                       {
+                           "indexed":  true,
+                           "internalType":  "uint256",
+                           "name":  "id",
+                           "type":  "uint256"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "enum ListingBoard.PricePeriod",
+                           "name":  "pricePeriod",
+                           "type":  "uint8"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "uint256",
+                           "name":  "priceWei",
+                           "type":  "uint256"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "uint32",
+                           "name":  "sizeSqm",
+                           "type":  "uint32"
+                       },
+                       {
+                           "indexed":  false,
+                           "internalType":  "string",
+                           "name":  "metadataCID",
+                           "type":  "string"
+                       }
+                   ],
+        "name":  "ListingUpdated",
+        "type":  "event"
+    },
+    {
+        "inputs":  [
+                       {
+                           "components":  [
+                                              {
+                                                  "internalType":  "uint256",
+                                                  "name":  "propertyId",
+                                                  "type":  "uint256"
+                                              },
+                                              {
+                                                  "internalType":  "enum ListingBoard.ListingType",
+                                                  "name":  "listingType",
+                                                  "type":  "uint8"
+                                              },
+                                              {
+                                                  "internalType":  "enum ListingBoard.Category",
+                                                  "name":  "category",
+                                                  "type":  "uint8"
+                                              },
+                                              {
+                                                  "internalType":  "enum ListingBoard.PricePeriod",
+                                                  "name":  "pricePeriod",
+                                                  "type":  "uint8"
+                                              },
+                                              {
+                                                  "internalType":  "uint256",
+                                                  "name":  "priceWei",
+                                                  "type":  "uint256"
+                                              },
+                                              {
+                                                  "internalType":  "uint32",
+                                                  "name":  "sizeSqm",
+                                                  "type":  "uint32"
+                                              },
+                                              {
+                                                  "internalType":  "string",
+                                                  "name":  "region",
+                                                  "type":  "string"
+                                              },
+                                              {
+                                                  "internalType":  "string",
+                                                  "name":  "metadataCID",
+                                                  "type":  "string"
+                                              }
+                                          ],
+                           "internalType":  "struct ListingBoard.NewListing",
+                           "name":  "input",
+                           "type":  "tuple"
+                       }
+                   ],
+        "name":  "createListing",
+        "outputs":  [
+                        {
+                            "internalType":  "uint256",
+                            "name":  "id",
+                            "type":  "uint256"
+                        }
+                    ],
+        "stateMutability":  "nonpayable",
+        "type":  "function"
+    },
+    {
+        "inputs":  [
+                       {
+                           "internalType":  "uint256",
+                           "name":  "id",
+                           "type":  "uint256"
+                       }
+                   ],
+        "name":  "getListing",
+        "outputs":  [
+                        {
+                            "components":  [
+                                               {
+                                                   "internalType":  "uint256",
+                                                   "name":  "id",
+                                                   "type":  "uint256"
+                                               },
+                                               {
+                                                   "internalType":  "uint256",
+                                                   "name":  "propertyId",
+                                                   "type":  "uint256"
+                                               },
+                                               {
+                                                   "internalType":  "address",
+                                                   "name":  "owner",
+                                                   "type":  "address"
+                                               },
+                                               {
+                                                   "internalType":  "enum ListingBoard.ListingType",
+                                                   "name":  "listingType",
+                                                   "type":  "uint8"
+                                               },
+                                               {
+                                                   "internalType":  "enum ListingBoard.Category",
+                                                   "name":  "category",
+                                                   "type":  "uint8"
+                                               },
+                                               {
+                                                   "internalType":  "enum ListingBoard.Status",
+                                                   "name":  "status",
+                                                   "type":  "uint8"
+                                               },
+                                               {
+                                                   "internalType":  "enum ListingBoard.PricePeriod",
+                                                   "name":  "pricePeriod",
+                                                   "type":  "uint8"
+                                               },
+                                               {
+                                                   "internalType":  "uint32",
+                                                   "name":  "sizeSqm",
+                                                   "type":  "uint32"
+                                               },
+                                               {
+                                                   "internalType":  "uint256",
+                                                   "name":  "priceWei",
+                                                   "type":  "uint256"
+                                               },
+                                               {
+                                                   "internalType":  "uint64",
+                                                   "name":  "createdAt",
+                                                   "type":  "uint64"
+                                               },
+                                               {
+                                                   "internalType":  "uint64",
+                                                   "name":  "updatedAt",
+                                                   "type":  "uint64"
+                                               },
+                                               {
+                                                   "internalType":  "string",
+                                                   "name":  "region",
+                                                   "type":  "string"
+                                               },
+                                               {
+                                                   "internalType":  "string",
+                                                   "name":  "metadataCID",
+                                                   "type":  "string"
+                                               }
+                                           ],
+                            "internalType":  "struct ListingBoard.Listing",
+                            "name":  "",
+                            "type":  "tuple"
+                        }
+                    ],
+        "stateMutability":  "view",
+        "type":  "function"
+    },
+    {
+        "inputs":  [
+
+                   ],
+        "name":  "propertyRegistry",
+        "outputs":  [
+                        {
+                            "internalType":  "contract IERC721",
+                            "name":  "",
+                            "type":  "address"
+                        }
+                    ],
+        "stateMutability":  "view",
+        "type":  "function"
+    },
+    {
+        "inputs":  [
+                       {
+                           "internalType":  "uint256",
+                           "name":  "id",
+                           "type":  "uint256"
+                       },
+                       {
+                           "internalType":  "enum ListingBoard.Status",
+                           "name":  "status",
+                           "type":  "uint8"
+                       }
+                   ],
+        "name":  "setStatus",
+        "outputs":  [
+
+                    ],
+        "stateMutability":  "nonpayable",
+        "type":  "function"
+    },
+    {
+        "inputs":  [
+
+                   ],
+        "name":  "totalListings",
+        "outputs":  [
+                        {
+                            "internalType":  "uint256",
+                            "name":  "",
+                            "type":  "uint256"
+                        }
+                    ],
+        "stateMutability":  "view",
+        "type":  "function"
+    },
+    {
+        "inputs":  [
+                       {
+                           "internalType":  "uint256",
+                           "name":  "id",
+                           "type":  "uint256"
+                       },
+                       {
+                           "internalType":  "enum ListingBoard.PricePeriod",
+                           "name":  "pricePeriod",
+                           "type":  "uint8"
+                       },
+                       {
+                           "internalType":  "uint256",
+                           "name":  "priceWei",
+                           "type":  "uint256"
+                       },
+                       {
+                           "internalType":  "uint32",
+                           "name":  "sizeSqm",
+                           "type":  "uint32"
+                       },
+                       {
+                           "internalType":  "string",
+                           "name":  "metadataCID",
+                           "type":  "string"
+                       }
+                   ],
+        "name":  "updateListing",
+        "outputs":  [
+
+                    ],
+        "stateMutability":  "nonpayable",
+        "type":  "function"
+    }
+]
