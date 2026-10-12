@@ -62,6 +62,11 @@ jobs:
           NEXT_PUBLIC_UPLOAD_URL: ${{ secrets.NEXT_PUBLIC_UPLOAD_URL }}
 
       - name: Publish to IPFS
+        if: ${{ secrets.PINATA_JWT != '' }}
         run: node scripts/pin-site.mjs
         env:
           PINATA_JWT: ${{ secrets.PINATA_JWT }}
+
+      - name: Skip IPFS publish when PINATA_JWT is missing
+        if: ${{ secrets.PINATA_JWT == '' }}
+        run: echo "::warning::PINATA_JWT is not set. Skipping IPFS publish."
