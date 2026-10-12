@@ -50,6 +50,27 @@ jobs:
             exit 1
           fi
 
+      # Fail early with a clear list if any setting is missing. Only checks
+      # whether each value is SET; it never prints the values themselves.
+      # The three NEXT_PUBLIC_ values aren't truly secret (they end up in the
+      # public website anyway), so they may be saved as repository Secrets OR
+      # Variables. PINATA_JWT must be a Secret.
+      - name: Check the settings are present
+        env:
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+          NEXT_PUBLIC_SEPOLIA_RPC_URL: ${{ secrets.NEXT_PUBLIC_SEPOLIA_RPC_URL || vars.NEXT_PUBLIC_SEPOLIA_RPC_URL }}
+          NEXT_PUBLIC_GATEWAY_URL: ${{ secrets.NEXT_PUBLIC_GATEWAY_URL || vars.NEXT_PUBLIC_GATEWAY_URL }}
+          NEXT_PUBLIC_UPLOAD_URL: ${{ secrets.NEXT_PUBLIC_UPLOAD_URL || vars.NEXT_PUBLIC_UPLOAD_URL }}
+        run: |
+          missing=""
+          for name in PINATA_JWT NEXT_PUBLIC_SEPOLIA_RPC_URL NEXT_PUBLIC_GATEWAY_URL NEXT_PUBLIC_UPLOAD_URL; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; else echo "✔ $name is set"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing:$missing. Add them in GitHub → Settings → Secrets and variables → Actions → 'Repository secrets' (exact names, all capitals)."
+            exit 1
+          fi
+
       - name: Install packages
         run: npm ci
 
@@ -57,9 +78,9 @@ jobs:
       - name: Build the static site
         run: npm run build
         env:
-          NEXT_PUBLIC_SEPOLIA_RPC_URL: ${{ secrets.NEXT_PUBLIC_SEPOLIA_RPC_URL }}
-          NEXT_PUBLIC_GATEWAY_URL: ${{ secrets.NEXT_PUBLIC_GATEWAY_URL }}
-          NEXT_PUBLIC_UPLOAD_URL: ${{ secrets.NEXT_PUBLIC_UPLOAD_URL }}
+          NEXT_PUBLIC_SEPOLIA_RPC_URL: ${{ secrets.NEXT_PUBLIC_SEPOLIA_RPC_URL || vars.NEXT_PUBLIC_SEPOLIA_RPC_URL }}
+          NEXT_PUBLIC_GATEWAY_URL: ${{ secrets.NEXT_PUBLIC_GATEWAY_URL || vars.NEXT_PUBLIC_GATEWAY_URL }}
+          NEXT_PUBLIC_UPLOAD_URL: ${{ secrets.NEXT_PUBLIC_UPLOAD_URL || vars.NEXT_PUBLIC_UPLOAD_URL }}
 
       - name: Publish to IPFS
         run: node scripts/pin-site.mjs
